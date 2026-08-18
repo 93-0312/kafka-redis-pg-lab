@@ -21,6 +21,7 @@
     "history": "tsx src/workers/history.ts",
     "api": "tsx src/api/server.ts",
     "backtest": "tsx src/backtest/run.ts",
+    "report": "tsx src/tools/daily-report.ts",
     "seed": "tsx src/tools/seed.ts seed",
     "replay": "tsx src/tools/admin.ts replay",
     "lag": "tsx src/tools/admin.ts lag",

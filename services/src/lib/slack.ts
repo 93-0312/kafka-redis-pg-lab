@@ -20,6 +20,23 @@ export function slackEnabled(alert: Pick<PriceAlert, 'market' | 'severity'>): bo
   );
 }
 
+/** 알림 규칙과 무관한 일반 메시지 발송 (아침 브리핑 등). 성공 여부를 돌려줍니다. */
+export async function sendSlackMessage(text: string, blocks?: unknown[]): Promise<boolean> {
+  if (!config.slack.webhookUrl) return false;
+  try {
+    const res = await fetch(config.slack.webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(blocks ? { text, blocks } : { text }),
+    });
+    if (!res.ok) console.error(`[slack] 발송 실패 (${res.status})`);
+    return res.ok;
+  } catch (err) {
+    console.error('[slack] 발송 실패:', (err as Error).message);
+    return false;
+  }
+}
+
 export async function sendSlackAlert(alert: PriceAlert): Promise<void> {
   if (!slackEnabled(alert)) return;
 
