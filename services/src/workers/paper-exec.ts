@@ -81,6 +81,14 @@ async function main(): Promise<void> {
       // 구버전 주문(환율 없음)은 KRW 로 간주합니다.
       const fx = order.fxRate > 0 ? order.fxRate : 1;
       const amount = order.quantity * order.price;
+      const grossKrw = amount * fx;
+
+      // 거래비용: 백테스트 엔진과 동일 수식. 페이퍼가 비용을 무시하면 수익률을 과대평가합니다.
+      const { feePct, krSellTaxPct, slippagePct } = config.paper.costs;
+      const sellTax = order.side === 'SELL' && order.market === 'KR' ? krSellTaxPct : 0;
+      const costKrw = (grossKrw * (feePct + slippagePct + sellTax)) / 100;
+      // 매수: 대금+비용 지출 / 매도: 대금-비용 입금
+      const cashDelta = order.side === 'BUY' ? grossKrw + costKrw : grossKrw - costKrw;
 
       const base: Omit<PaperTradeRecord, 'status' | 'rejectReason' | 'realizedPnl'> = {
         tradeId: randomUUID(),
@@ -91,7 +99,8 @@ async function main(): Promise<void> {
         price: order.price,
         currency: order.currency,
         amount,
-        amountKrw: amount * fx,
+        amountKrw: cashDelta,
+        costKrw,
         strategy: sid,
         reason: order.reason,
         filledAt: new Date().toISOString(),
@@ -109,6 +118,7 @@ async function main(): Promise<void> {
         const pos = await redis.hgetall(posKey);
         const prevQty = Number(pos['quantity'] ?? 0);
         const prevAvg = Number(pos['avgPrice'] ?? 0);
+        const prevCost = Number(pos['costKrw'] ?? 0);
         const newQty = prevQty + order.quantity;
         // 평단은 거래 통화 기준으로 유지합니다 (현금 차감만 원화 환산)
         const newAvg = (prevQty * prevAvg + amount) / newQty;
@@ -123,6 +133,8 @@ async function main(): Promise<void> {
             currency: order.currency,
             quantity: String(newQty),
             avgPrice: String(newAvg),
+            // 매수 총지출(비용 포함) 누적 — 실현손익 = 순매도대금 - costKrw
+            costKrw: String(prevCost + base.amountKrw),
             openedAt: pos['openedAt'] ?? base.filledAt,
           })
           .sadd(K.paperPosIndex(sid), order.symbol)
@@ -137,9 +149,12 @@ async function main(): Promise<void> {
           });
           return;
         }
+        const posCost = Number(pos['costKrw'] ?? 0);
+        // 실현손익 = 순매도대금 - 매수 총지출(비용 포함, 부분 매도 시 비례 배분)
+        // 구버전 포지션(costKrw 없음)은 평단 기준으로 근사합니다.
         const avg = Number(pos['avgPrice'] ?? 0);
-        // 실현손익은 원화로 환산해 기록합니다 (매도 시점 환율 적용)
-        const realizedPnl = (order.price - avg) * order.quantity * fx;
+        const costBasis = posCost > 0 ? posCost * (order.quantity / held) : avg * order.quantity * fx;
+        const realizedPnl = base.amountKrw - costBasis;
         const remain = held - order.quantity;
 
         const pipe = redis.multi().hincrbyfloat(accountKey, 'cash', base.amountKrw);

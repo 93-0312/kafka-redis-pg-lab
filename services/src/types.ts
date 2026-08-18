@@ -98,10 +98,12 @@ export interface PaperTradeRecord {
   price: number;
   /** 구버전 기록에는 없을 수 있음 (KRW 로 간주) */
   currency?: Currency;
-  /** 거래 통화 기준 금액 */
+  /** 거래 통화 기준 금액 (비용 제외) */
   amount: number;
-  /** 원화 환산 금액 (계좌 현금 증감액) */
+  /** 원화 환산 계좌 현금 증감액 (매수: 지출 = 대금+비용, 매도: 입금 = 대금-비용) */
   amountKrw: number;
+  /** 이 체결에서 지불한 거래비용 (원화). 구버전 기록에는 없음 */
+  costKrw?: number;
   /** SELL 일 때만: 실현 손익 (원화) */
   realizedPnl?: number;
   strategy: string;

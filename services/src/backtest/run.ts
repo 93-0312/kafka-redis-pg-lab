@@ -137,6 +137,8 @@ async function main(): Promise<void> {
     staleTickSec: config.paper.staleTickSec,
     markets,
     usdKrw: 1410,
+    maxHoldMin: config.paper.maxHoldMin,
+    dailyMaxLossPct: config.paper.dailyMaxLossPct,
     costs,
   };
 

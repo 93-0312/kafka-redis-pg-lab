@@ -27,6 +27,10 @@ export interface BacktestConfig {
   markets: Market[];
   /** USD→KRW 고정 환율 (근사) */
   usdKrw: number;
+  /** 시간 청산: 이 시간(분) 넘게 보유하면 강제 청산 */
+  maxHoldMin: number;
+  /** 일일 킬 스위치: 당일 시작 자산 대비 이 % 손실이면 당일 신규 진입 중단 */
+  dailyMaxLossPct: number;
   /**
    * 거래비용 모델 (편도 기준 %).
    * scalper 처럼 익절 폭이 좁은 전략은 비용을 넣는 순간 기대값이 뒤집힐 수 있어서,
@@ -68,6 +72,8 @@ export interface StrategyResult {
   winRate: number | null;
   /** 최대 낙폭 (자산 고점 대비, 0.05 = -5%) */
   maxDrawdown: number;
+  /** 킬 스위치 발동 일수 */
+  killDays: number;
   openPositions: number;
   trades: BacktestTrade[];
 }
@@ -86,6 +92,11 @@ interface SimAccount {
   sells: number;
   peak: number;
   maxDrawdown: number;
+  /** 킬 스위치 상태: 당일 시작 자산과 발동 여부 */
+  dayKey: string;
+  dayStartEquity: number;
+  killed: boolean;
+  killCount: number;
 }
 
 export function runBacktest(
@@ -110,6 +121,10 @@ export function runBacktest(
         sells: 0,
         peak: cfg.initialCash,
         maxDrawdown: 0,
+        dayKey: '',
+        dayStartEquity: cfg.initialCash,
+        killed: false,
+        killCount: 0,
       },
     ]),
   );
@@ -132,14 +147,40 @@ export function runBacktest(
     lastPrice.set(tick.symbol, { price: tick.price, fx });
 
     const rate = changeRate(tick.price, tick.prevClose);
-    const ctx = tracker.next(tick, dateKey(tick.polledAt), rate);
+    const dayKey = dateKey(tick.polledAt);
+    const ctx = tracker.next(tick, dayKey, rate);
 
     for (const def of defs) {
       const acc = accounts.get(def.id)!;
+
+      // 날짜가 바뀌면 킬 스위치 리셋 + 당일 시작 자산 기록
+      if (acc.dayKey !== dayKey) {
+        acc.dayKey = dayKey;
+        acc.dayStartEquity = equityOf(acc);
+        acc.killed = false;
+      }
+
       const position = acc.positions.get(tick.symbol) ?? null;
-      const decision = decide(tick, rate, position, ctx, def);
+
+      // 시간 청산 (라이브 워커와 동일)
+      let decision = decide(tick, rate, position, ctx, def);
+      if (!decision && position) {
+        const heldMin = (now - Date.parse(position.openedAt)) / 60_000;
+        if (heldMin >= cfg.maxHoldMin) {
+          decision = { side: 'SELL', reason: `시간 청산: 보유 ${Math.round(heldMin)}분 ≥ ${cfg.maxHoldMin}분` };
+        }
+      }
 
       if (decision?.side === 'BUY') {
+        // 일일 킬 스위치 (라이브 워커와 동일): 신규 진입만 차단
+        if (!acc.killed && acc.dayStartEquity > 0) {
+          const loss = (acc.dayStartEquity - equityOf(acc)) / acc.dayStartEquity;
+          if (loss >= cfg.dailyMaxLossPct / 100) {
+            acc.killed = true;
+            acc.killCount += 1;
+          }
+        }
+        if (acc.killed) continue;
         if ((acc.cooldownUntil.get(tick.symbol) ?? 0) > now) continue;
         if (acc.positions.size >= cfg.maxPositions) continue;
         const quantity = positionSize(acc.cash, cfg.positionPct, tick.price * fx);
@@ -211,6 +252,7 @@ export function runBacktest(
       wins: acc.wins,
       winRate: acc.sells > 0 ? acc.wins / acc.sells : null,
       maxDrawdown: acc.maxDrawdown,
+      killDays: acc.killCount,
       openPositions: acc.positions.size,
       trades: acc.trades,
     };

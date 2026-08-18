@@ -87,6 +87,16 @@ export const config = {
     cooldownSec: num(process.env.PAPER_COOLDOWN_SEC, 600),
     /** 이보다 오래된 체결 시각의 틱은 무시 (장 마감 후 정지 시세로 매매 방지) */
     staleTickSec: num(process.env.PAPER_STALE_TICK_SEC, 600),
+    /** 시간 청산: 이 시간(분) 넘게 보유하면 강제 청산. 익절/손절에 안 닿는 좀비 포지션 방지 */
+    maxHoldMin: num(process.env.PAPER_MAX_HOLD_MIN, 360),
+    /** 일일 킬 스위치: 당일 시작 자산 대비 이 % 손실이면 당일 신규 진입 중단 (청산은 허용) */
+    dailyMaxLossPct: num(process.env.PAPER_DAILY_MAX_LOSS_PCT, 2),
+    /** 거래비용 (편도 %). 백테스트 기본값과 동일하게 유지해야 페이퍼 성적을 믿을 수 있습니다 */
+    costs: {
+      feePct: num(process.env.PAPER_FEE_PCT, 0.015),
+      krSellTaxPct: num(process.env.PAPER_KR_SELL_TAX_PCT, 0.15),
+      slippagePct: num(process.env.PAPER_SLIPPAGE_PCT, 0.05),
+    },
   },
   alerts: {
     /** 등락률 계단 간격(%). 1이면 ±1%, ±2%, ±3% ... 도달 시마다 알림 */

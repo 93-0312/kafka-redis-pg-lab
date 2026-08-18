@@ -5,6 +5,7 @@ import { CtxTracker, STRATEGIES, decide, isStale, positionSize } from '../domain
 import { createConsumer, createProducer, onShutdown } from '../lib/kafka.js';
 import { K } from '../lib/keys.js';
 import { createRedis } from '../lib/redis.js';
+import { sendSlackMessage } from '../lib/slack.js';
 import { fetchExchangeRate } from '../lib/toss.js';
 import type { PaperOrderEvent, PaperPosition, TickEvent } from '../types.js';
 
@@ -41,6 +42,56 @@ async function refreshFx(redis: ReturnType<typeof createRedis>): Promise<void> {
       if (cached > 0) usdKrw = cached;
     }
   }
+}
+
+/** 전략 계좌의 현재 자산 (현금 + 보유 포지션의 원화 환산 평가액) */
+async function computeEquity(
+  redis: ReturnType<typeof createRedis>,
+  strategyId: string,
+): Promise<number> {
+  let equity = Number(await redis.hget(K.paperAccount(strategyId), 'cash')) || 0;
+  const symbols = await redis.smembers(K.paperPosIndex(strategyId));
+  for (const symbol of symbols) {
+    const pos = await redis.hgetall(K.paperPos(strategyId, symbol));
+    const qty = Number(pos['quantity'] ?? 0);
+    const avg = Number(pos['avgPrice'] ?? 0);
+    const last = Number(await redis.hget(K.quote(symbol), 'price')) || avg;
+    const fx = pos['currency'] === 'USD' ? usdKrw || 1400 : 1;
+    equity += qty * last * fx;
+  }
+  return equity;
+}
+
+/**
+ * 일일 킬 스위치: 당일 시작 자산 대비 -X% 면 그날은 신규 진입을 멈춥니다 (청산은 계속).
+ * 전략이 무너지는 날 손실이 눈덩이처럼 불어나는 것을 막는 최소 안전장치입니다.
+ */
+async function killSwitchActive(
+  redis: ReturnType<typeof createRedis>,
+  strategyId: string,
+  dayKey: string,
+): Promise<boolean> {
+  if (await redis.exists(K.paperKill(strategyId, dayKey))) return true;
+
+  const dayStartKey = K.paperDayStart(strategyId, dayKey);
+  let dayStart = Number(await redis.get(dayStartKey));
+  if (!dayStart) {
+    dayStart = await computeEquity(redis, strategyId);
+    await redis.set(dayStartKey, String(dayStart), 'EX', 60 * 60 * 48, 'NX');
+  }
+  if (dayStart <= 0) return false;
+
+  const equity = await computeEquity(redis, strategyId);
+  const loss = (dayStart - equity) / dayStart;
+  if (loss < config.paper.dailyMaxLossPct / 100) return false;
+
+  const first = await redis.set(K.paperKill(strategyId, dayKey), '1', 'EX', 60 * 60 * 48, 'NX');
+  if (first === 'OK') {
+    const msg = `🛑 [킬 스위치] ${strategyId} 당일 손실 ${(loss * 100).toFixed(2)}% ≥ ${config.paper.dailyMaxLossPct}% — 오늘 신규 진입 중단 (청산은 계속)`;
+    console.warn(`[strategy] ${msg}`);
+    await sendSlackMessage(msg);
+  }
+  return true;
 }
 
 async function loadPosition(
@@ -97,12 +148,24 @@ async function main(): Promise<void> {
       if (fxRate <= 0) return;
 
       const rate = changeRate(tick.price, tick.prevClose);
-      const ctx = ctxTracker.next(tick, dateKey(tick.polledAt), rate);
+      const dayKey = dateKey(tick.polledAt);
+      const ctx = ctxTracker.next(tick, dayKey, rate);
 
       for (const def of STRATEGIES) {
         const position = await loadPosition(redis, def.id, tick.symbol);
-        const decision = decide(tick, rate, position, ctx, def);
+
+        // 시간 청산: 익절도 손절도 안 닿는 좀비 포지션을 강제 종료합니다.
+        let decision = decide(tick, rate, position, ctx, def);
+        if (!decision && position) {
+          const heldMin = (Date.now() - Date.parse(position.openedAt)) / 60_000;
+          if (heldMin >= config.paper.maxHoldMin) {
+            decision = { side: 'SELL', reason: `시간 청산: 보유 ${Math.round(heldMin)}분 ≥ ${config.paper.maxHoldMin}분` };
+          }
+        }
         if (!decision) continue;
+
+        // 일일 킬 스위치: 발동 시 신규 진입만 차단, 청산은 그대로 진행합니다.
+        if (decision.side === 'BUY' && (await killSwitchActive(redis, def.id, dayKey))) continue;
 
         // 체결 반영 전 같은 전략×종목 중복 주문 방지
         const pending = await redis.set(K.paperPending(def.id, tick.symbol), '1', 'EX', 30, 'NX');

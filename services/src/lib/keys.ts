@@ -38,6 +38,12 @@ export const K = {
   paperTrades: (strategy: string) => `mkt:paper:${strategy}:trades`,
   /** STRING(TTL): 전략×종목 재진입 쿨다운 */
   paperCooldown: (strategy: string, symbol: string) => `mkt:paper:${strategy}:cooldown:${symbol}`,
+  /** STRING(TTL): 당일 시작 자산 (킬 스위치 기준값) */
+  paperDayStart: (strategy: string, date: string) => `mkt:paper:${strategy}:daystart:${date}`,
+  /** STRING(TTL): 킬 스위치 발동 마커. 존재하면 당일 신규 진입 금지 */
+  paperKill: (strategy: string, date: string) => `mkt:paper:${strategy}:kill:${date}`,
+  /** STRING(TTL): 워커 하트비트 */
+  heartbeat: (name: string) => `mkt:heartbeat:${name}`,
   /** STRING(TTL): 주문 발행 후 체결 반영 전 중복 주문 방지 */
   paperPending: (strategy: string, symbol: string) => `mkt:paper:${strategy}:pending:${symbol}`,
 

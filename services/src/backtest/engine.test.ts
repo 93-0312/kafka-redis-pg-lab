@@ -14,6 +14,8 @@ const CFG: BacktestConfig = {
   staleTickSec: 600,
   markets: ['KR'],
   usdKrw: 1400,
+  maxHoldMin: 360,
+  dailyMaxLossPct: 2,
   costs: NO_COSTS,
 };
 
@@ -98,6 +100,35 @@ test('engine: 거래비용이 실현손익을 갉아먹는다', () => {
   // 왕복 비용 ≈ 매수 0.065% + 매도 0.215% — 비용 반영 실현손익이 정확히 그만큼 작아야 함
   assert.ok(paid.realizedPnl < free.realizedPnl);
   assert.ok(Math.abs(free.realizedPnl - paid.realizedPnl - paid.costsPaid) < 1);
+});
+
+test('engine: 시간 청산 — 익절/손절 미도달 좀비 포지션 강제 종료', () => {
+  const ticks = [
+    tick(0, 100_000),
+    tick(3, 97_000),                 // -3% 돌파 — 진입
+    tick(60 * 60 * 7, 97_500),       // 7시간 뒤에도 ±1.5% 안 — maxHoldMin(360분) 초과 → 강제 청산
+  ];
+  const [r] = runBacktest(ticks, meanrevert, CFG);
+  assert.ok(r);
+  assert.equal(r.sells, 1);
+  assert.match(r.trades[1]!.reason, /시간 청산/);
+  assert.equal(r.openPositions, 0);
+});
+
+test('engine: 일일 킬 스위치 — 당일 -2% 손실이면 신규 진입 중단', () => {
+  // positionPct 100% 로 만들어 한 번의 손절로 계좌 -2% 를 넘기게 합니다
+  const cfg: BacktestConfig = { ...CFG, positionPct: 100, cooldownSec: 1 };
+  const ticks = [
+    tick(0, 100_000),
+    tick(3, 97_000),   // -2% 하향 돌파 — 진입 (전액)
+    tick(6, 94_500),   // 평단 대비 -2.58% 손절 → 계좌 -2.5%
+    tick(10, 99_000),  // -1% 까지 반등 (크로싱 기준 리셋)
+    tick(13, 97_500),  // -2.5% 재돌파 — 진입 신호… 이지만 킬 스위치 발동 — 진입 금지
+  ];
+  const [r] = runBacktest(ticks, meanrevert, cfg);
+  assert.ok(r);
+  assert.equal(r.killDays, 1);
+  assert.equal(r.fills, 2); // 첫 사이클 BUY+SELL 뿐, 재진입 없음
 });
 
 test('engine: 낡은 틱(장 마감 정지 시세)은 무시', () => {
