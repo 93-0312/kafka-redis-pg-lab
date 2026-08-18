@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { config } from '../config.js';
+import { AsOfIndicatorStore, type DailyCandle } from '../domain/indicators.js';
 import { changeRate, dateKey } from '../domain/quotes.js';
 import { CtxTracker, STRATEGIES, decide, isStale, positionSize } from '../domain/strategy.js';
 import { createConsumer, createProducer, onShutdown } from '../lib/kafka.js';
@@ -7,7 +8,7 @@ import { K } from '../lib/keys.js';
 import { createRedis } from '../lib/redis.js';
 import { startHeartbeat } from '../lib/heartbeat.js';
 import { sendSlackMessage } from '../lib/slack.js';
-import { fetchExchangeRate, fetchStockWarnings } from '../lib/toss.js';
+import { fetchDailyCandles, fetchExchangeRate, fetchStockWarnings, toDailyCandle } from '../lib/toss.js';
 import type { PaperOrderEvent, PaperPosition, TickEvent } from '../types.js';
 
 /**
@@ -42,6 +43,29 @@ async function refreshFx(redis: ReturnType<typeof createRedis>): Promise<void> {
       const cached = Number(await redis.get(K.fxUsdKrw));
       if (cached > 0) usdKrw = cached;
     }
+  }
+}
+
+/**
+ * 일봉 지표 스토어. 시작 시 + 30분마다 종목별 일봉 80개를 받아 갱신합니다.
+ * as-of 조회라 오늘의 미완성 봉은 지표에 섞이지 않습니다.
+ */
+let indicatorStore = new AsOfIndicatorStore(new Map(), dateKey);
+
+async function refreshIndicators(symbols: string[]): Promise<void> {
+  const bySymbol = new Map<string, DailyCandle[]>();
+  for (const symbol of symbols) {
+    try {
+      // 종목당 1콜 순차 호출 — rate limit(초당 ~10회) 안에서 여유
+      const candles = await fetchDailyCandles(symbol, 80);
+      bySymbol.set(symbol, candles.map(toDailyCandle));
+    } catch (err) {
+      console.warn(`[strategy] ${symbol} 일봉 조회 실패:`, (err as Error).message);
+    }
+  }
+  if (bySymbol.size > 0) {
+    indicatorStore = new AsOfIndicatorStore(bySymbol, dateKey);
+    console.log(`[strategy] 지표 부트스트랩 완료: ${bySymbol.size}종목 × 일봉 80개 (MA/볼린저/RSI/ATR)`);
   }
 }
 
@@ -147,7 +171,11 @@ async function main(): Promise<void> {
   const redis = createRedis('strategy');
   startHeartbeat(redis, 'strategy');
   await refreshFx(redis);
-  const fxTimer = setInterval(() => void refreshFx(redis), 30 * 60 * 1000);
+  await refreshIndicators(config.toss.symbols);
+  const fxTimer = setInterval(() => {
+    void refreshFx(redis);
+    void refreshIndicators(config.toss.symbols);
+  }, 30 * 60 * 1000);
 
   const consumer = await createConsumer('mktlab-strategy', config.kafka.groups.strategy);
   const producer = await createProducer('mktlab-strategy-out');
@@ -182,6 +210,7 @@ async function main(): Promise<void> {
       const rate = changeRate(tick.price, tick.prevClose);
       const dayKey = dateKey(tick.polledAt);
       const ctx = ctxTracker.next(tick, dayKey, rate);
+      ctx.daily = indicatorStore.get(tick.symbol, dayKey);
 
       for (const def of STRATEGIES) {
         const position = await loadPosition(redis, def.id, tick.symbol);

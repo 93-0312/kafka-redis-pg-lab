@@ -230,13 +230,20 @@ cd services && npm test      # 13 passing
 **전략 5개가 각자 독립된 1억원 가상계좌로 같은 시장을 동시에 매매**하며, 페이퍼 탭의
 리더보드(수익률 순)에서 전략별 성적을 비교할 수 있습니다. 규칙은 `domain/strategy.ts` 한 파일에 모여 있습니다.
 
-| 전략 | 컨셉 | 진입 | 청산 |
+| 전략 | 진입 (크로싱 = 임계값을 "새로" 돌파하는 순간만) | 지표 확인 | 청산 |
 |---|---|---|---|
-| meanrevert | 평균회귀 | 전일 대비 -2% | ±1.5% |
-| momentum | 추세추종 | 전일 대비 +2% | ±1.5% |
-| deepdip | 낙폭과대 | 전일 대비 -4% | ±3% |
-| scalper | 초단타 | 1분 내 +0.3% 급등 | ±0.5% |
-| highbreak | 신고가돌파 | 당일 고가 갱신+상승 중 | +2% / -1% |
+| meanrevert | 전일 대비 -2% 하향 돌파 | RSI(14) < 40 | ±1.5% |
+| momentum | 전일 대비 +2% 상향 돌파 | 주가 > MA20 | ±1.5% |
+| deepdip | 전일 대비 -4% 하향 돌파 | — | +3% / max(3%, 1.5×ATR) |
+| scalper | 1분 내 +0.3% 상향 돌파 | RSI(14) < 70 | ±1.5% |
+| highbreak | 당일 고가 갱신 + 상승 중 | — | +2% / -1% |
+
+지표(MA20/60·볼린저·RSI·ATR)는 토스 일봉 API 로 계산하며 **as-of 원칙**(그날 이전 봉만 사용)으로
+라이브·백테스트가 같은 값을 봅니다. 지표가 없으면 필터는 통과 — 보조 확인이지 필수 조건이 아닙니다.
+
+**안전장치**: 일일 킬 스위치(당일 -2% 손실 시 신규 진입 중단 + 슬랙 통보) · 시간 청산(6시간 초과 보유
+강제 종료) · VI/정리매매/투자위험 종목 진입 차단 · 재진입 쿨다운 30분 · 거래비용 반영
+(수수료+거래세+슬리피지, 백테스트와 동일 수식) · 워커 하트비트(`/api/health`)
 
 ```
 market.ticks ──▶ strategy-worker (Consumer Group C)   ← 기존 워커는 그대로, 소비자만 추가
@@ -290,6 +297,9 @@ npm run backtest -- --from 2026-08-18 --to 2026-08-19
 npm run backtest -- --markets KR                  # 국장만
 npm run backtest -- --trades meanrevert           # 체결 내역까지 출력
 npm run backtest -- --sweep meanrevert            # 진입/익절/손절 150개 조합 스윕
+npm run backtest -- --no-costs                    # 거래비용 제외 (비교용)
+npm run backtest -- --no-indicators               # 지표 필터 제외 (비교용)
+npm run backtest -- --fee 0.015 --tax 0.15 --slip 0.05   # 비용 조정 (편도 %)
 ```
 
 리포트: 수익률 · 실현손익 · MDD(최대 낙폭) · 체결/청산 수 · 승률 · 미청산 포지션.

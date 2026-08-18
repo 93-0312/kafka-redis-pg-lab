@@ -1,3 +1,4 @@
+import type { DailyIndicators } from './indicators.js';
 import type { PaperPosition, TickEvent } from '../types.js';
 
 /**
@@ -23,6 +24,11 @@ export interface MarketCtx {
   prevRate: number | null;
   /** 직전 틱의 shortChange (초단타 크로싱 감지용) */
   prevShortChange: number | null;
+  /**
+   * 일봉 기반 as-of 지표 (전일까지의 데이터로 계산 — 선견 편향 없음).
+   * 없으면(부트스트랩 전 등) 전략의 지표 필터는 통과시킵니다 (보조 확인 원칙).
+   */
+  daily?: DailyIndicators;
 }
 
 export interface StrategyDef {
@@ -33,7 +39,15 @@ export interface StrategyDef {
   entry: (tick: TickEvent, changeRate: number, ctx: MarketCtx) => string | null;
   takeProfitPct: number;
   stopLossPct: number;
+  /** 동적 손절 폭(%). 지정 시 stopLossPct 대신 사용 (예: ATR 기반) */
+  dynamicStopPct?: (ctx: MarketCtx) => number;
 }
+
+/** 지표 필터 헬퍼: 지표가 없으면 통과 (보조 확인이지 필수 조건이 아님) */
+const rsiBelow = (ctx: MarketCtx, level: number): boolean =>
+  ctx.daily?.rsi14 == null || ctx.daily.rsi14 < level;
+const aboveMa20 = (ctx: MarketCtx, price: number): boolean =>
+  ctx.daily?.ma20 == null || price > ctx.daily.ma20;
 
 const pct = (r: number): string => `${r >= 0 ? '+' : ''}${(r * 100).toFixed(2)}%`;
 
@@ -47,10 +61,10 @@ export const STRATEGIES: StrategyDef[] = [
   {
     id: 'meanrevert',
     label: '평균회귀',
-    description: '-2% 하향 돌파 "순간" 매수 (크로싱) · 익절 +1.5% / 손절 -1.5%',
+    description: '-2% 하향 돌파 + RSI<40 (과매도 확인) · 익절 +1.5% / 손절 -1.5%',
     entry: (_t, rate, ctx) =>
-      crossedDown(ctx.prevRate, rate, -0.02)
-        ? `급락 돌파 매수: ${pct(ctx.prevRate!)} → ${pct(rate)} (-2% 하향 돌파)`
+      crossedDown(ctx.prevRate, rate, -0.02) && rsiBelow(ctx, 40)
+        ? `급락 돌파 매수: ${pct(ctx.prevRate!)} → ${pct(rate)} (-2% 하향 돌파, RSI ${ctx.daily?.rsi14?.toFixed(0) ?? '?'})`
         : null,
     takeProfitPct: 1.5,
     stopLossPct: 1.5,
@@ -58,10 +72,10 @@ export const STRATEGIES: StrategyDef[] = [
   {
     id: 'momentum',
     label: '추세추종',
-    description: '+2% 상향 돌파 "순간" 매수 (크로싱) · 익절 +1.5% / 손절 -1.5%',
-    entry: (_t, rate, ctx) =>
-      crossedUp(ctx.prevRate, rate, 0.02)
-        ? `돌파 매수: ${pct(ctx.prevRate!)} → ${pct(rate)} (+2% 상향 돌파)`
+    description: '+2% 상향 돌파 + 주가>MA20 (추세 확인) · 익절 +1.5% / 손절 -1.5%',
+    entry: (t, rate, ctx) =>
+      crossedUp(ctx.prevRate, rate, 0.02) && aboveMa20(ctx, t.price)
+        ? `돌파 매수: ${pct(ctx.prevRate!)} → ${pct(rate)} (+2% 상향 돌파, MA20 위)`
         : null,
     takeProfitPct: 1.5,
     stopLossPct: 1.5,
@@ -69,13 +83,16 @@ export const STRATEGIES: StrategyDef[] = [
   {
     id: 'deepdip',
     label: '낙폭과대',
-    description: '-4% 하향 돌파 "순간" 매수 (크로싱), 길게 홀드 · 익절 +3% / 손절 -3%',
+    description: '-4% 하향 돌파 매수, 길게 홀드 · 익절 +3% / 손절 max(3%, 1.5×ATR) — 변동성이 크면 손절도 넓게',
     entry: (_t, rate, ctx) =>
       crossedDown(ctx.prevRate, rate, -0.04)
         ? `낙폭과대 돌파 매수: ${pct(ctx.prevRate!)} → ${pct(rate)} (-4% 하향 돌파)`
         : null,
     takeProfitPct: 3,
     stopLossPct: 3,
+    // -4% 빠진 종목의 일중 변동성이면 고정 -3% 는 노이즈에 터집니다. ATR 로 여유를 줍니다.
+    dynamicStopPct: (ctx) =>
+      ctx.daily?.atrPct != null ? Math.max(3, ctx.daily.atrPct * 1.5) : 3,
   },
   {
     id: 'scalper',
@@ -85,7 +102,8 @@ export const STRATEGIES: StrategyDef[] = [
       '(구 ±0.5% 는 왕복 비용 ~0.27% 에 잠식되어 기대값 음수 — 비용의 5배 이상으로 재설계)',
     entry: (_t, _rate, ctx) =>
       ctx.shortChange !== null &&
-      crossedUp(ctx.prevShortChange, ctx.shortChange, 0.003)
+      crossedUp(ctx.prevShortChange, ctx.shortChange, 0.003) &&
+      rsiBelow(ctx, 70) // 이미 과열(RSI≥70)인 종목의 고점 추격은 걸러냅니다
         ? `급등 편승: 1분 내 ${pct(ctx.shortChange)} (+0.3% 상향 돌파)`
         : null,
     takeProfitPct: 1.5,
@@ -121,11 +139,12 @@ export function decide(
 ): Decision | null {
   if (position) {
     const fromAvg = (tick.price - position.avgPrice) / position.avgPrice;
+    const stopPct = def.dynamicStopPct?.(ctx) ?? def.stopLossPct;
     if (fromAvg >= def.takeProfitPct / 100) {
       return { side: 'SELL', reason: `익절: 평단 대비 ${pct(fromAvg)} ≥ +${def.takeProfitPct}%` };
     }
-    if (fromAvg <= -def.stopLossPct / 100) {
-      return { side: 'SELL', reason: `손절: 평단 대비 ${pct(fromAvg)} ≤ -${def.stopLossPct}%` };
+    if (fromAvg <= -stopPct / 100) {
+      return { side: 'SELL', reason: `손절: 평단 대비 ${pct(fromAvg)} ≤ -${stopPct.toFixed(1)}%` };
     }
     return null;
   }

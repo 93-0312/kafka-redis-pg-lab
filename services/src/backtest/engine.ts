@@ -1,3 +1,4 @@
+import { AsOfIndicatorStore, type DailyCandle } from '../domain/indicators.js';
 import { changeRate, dateKey } from '../domain/quotes.js';
 import {
   CtxTracker,
@@ -31,6 +32,8 @@ export interface BacktestConfig {
   maxHoldMin: number;
   /** 일일 킬 스위치: 당일 시작 자산 대비 이 % 손실이면 당일 신규 진입 중단 */
   dailyMaxLossPct: number;
+  /** 종목별 일봉 (지표 as-of 계산용). 없으면 지표 필터는 통과 처리됩니다 */
+  dailyCandles?: Map<string, DailyCandle[]>;
   /**
    * 거래비용 모델 (편도 기준 %).
    * scalper 처럼 익절 폭이 좁은 전략은 비용을 넣는 순간 기대값이 뒤집힐 수 있어서,
@@ -105,6 +108,7 @@ export function runBacktest(
   cfg: BacktestConfig,
 ): StrategyResult[] {
   const tracker = new CtxTracker();
+  const indicators = new AsOfIndicatorStore(cfg.dailyCandles ?? new Map(), dateKey);
   const lastPrice = new Map<string, { price: number; fx: number }>();
 
   const accounts = new Map<string, SimAccount>(
@@ -149,6 +153,7 @@ export function runBacktest(
     const rate = changeRate(tick.price, tick.prevClose);
     const dayKey = dateKey(tick.polledAt);
     const ctx = tracker.next(tick, dayKey, rate);
+    ctx.daily = indicators.get(tick.symbol, dayKey);
 
     for (const def of defs) {
       const acc = accounts.get(def.id)!;

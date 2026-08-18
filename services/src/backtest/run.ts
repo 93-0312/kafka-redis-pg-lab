@@ -1,6 +1,8 @@
 import { config } from '../config.js';
+import type { DailyCandle } from '../domain/indicators.js';
 import { STRATEGIES, type StrategyDef } from '../domain/strategy.js';
 import { createPool } from '../lib/pg.js';
+import { fetchDailyCandles, toDailyCandle } from '../lib/toss.js';
 import type { Market, TickEvent } from '../types.js';
 import { runBacktest, type BacktestConfig, type StrategyResult } from './engine.js';
 
@@ -118,6 +120,20 @@ async function main(): Promise<void> {
     `틱 ${ticks.length.toLocaleString('ko-KR')}건 · ${ticks[0]!.polledAt.slice(0, 16)} ~ ${ticks[ticks.length - 1]!.polledAt.slice(0, 16)}\n`,
   );
 
+  // 종목별 일봉 로드 (as-of 지표용). 실패해도 백테스트는 지표 필터 없이 계속 갑니다.
+  const symbols = [...new Set(ticks.map((t) => t.symbol))];
+  const dailyCandles = new Map<string, DailyCandle[]>();
+  if (!process.argv.includes('--no-indicators')) {
+    for (const symbol of symbols) {
+      try {
+        dailyCandles.set(symbol, (await fetchDailyCandles(symbol, 200)).map(toDailyCandle));
+      } catch (err) {
+        console.warn(`${symbol} 일봉 로드 실패 (${(err as Error).message}) — 지표 필터 없이 진행`);
+      }
+    }
+    console.log(`지표 준비: ${dailyCandles.size}/${symbols.length}종목 일봉 로드 (MA·볼린저·RSI·ATR, as-of)\n`);
+  }
+
   // 거래비용 (편도 %). --fee/--tax/--slip 로 조정, --no-costs 로 0 처리
   const noCosts = process.argv.includes('--no-costs');
   const costs = {
@@ -139,6 +155,7 @@ async function main(): Promise<void> {
     usdKrw: 1410,
     maxHoldMin: config.paper.maxHoldMin,
     dailyMaxLossPct: config.paper.dailyMaxLossPct,
+    dailyCandles,
     costs,
   };
 

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { buildSpikeAlert, buildThresholdAlert, changeLevel, isSpike, levelSeverity } from './alerts.js';
+import { AsOfIndicatorStore, computeDailyIndicators, type DailyCandle } from './indicators.js';
 import { changeRate, mergeCandle, minuteBucket, pickPrevClose } from './quotes.js';
 import { STRATEGIES, decide, isStale, positionSize, type MarketCtx } from './strategy.js';
 import type { PaperPosition, TickEvent } from '../types.js';
@@ -176,6 +177,88 @@ test('decide: 포지션이 있으면 익절/손절만 검토', () => {
   assert.match(decide(tick({ price: 68900 }), 0, position(70000), CTX, def)?.reason ?? '', /손절/);
   assert.equal(decide(tick({ price: 70500 }), -0.05, position(70000), CTX, def), null);
 });
+
+// ── 지표 ───────────────────────────────────────────────
+
+const candle = (day: number, close: number, spread = 0.01): DailyCandle => ({
+  timestamp: new Date(Date.UTC(2026, 0, 1 + day)).toISOString(),
+  open: close, high: close * (1 + spread), low: close * (1 - spread), close, volume: 1000,
+});
+
+test('indicators: MA20·볼린저·RSI·ATR 계산', () => {
+  // 100 에서 매일 +1 씩 오르는 30일
+  const candles = Array.from({ length: 30 }, (_, i) => candle(i, 100 + i));
+  const ind = computeDailyIndicators(candles);
+  assert.ok(ind.ma20 !== null && Math.abs(ind.ma20 - avgOf(110, 129)) < 1e-9);
+  assert.equal(ind.ma60, null); // 60개 미만
+  assert.equal(ind.rsi14, 100); // 상승만 있으면 RSI 100
+  assert.ok(ind.bbUpper! > ind.ma20! && ind.bbLower! < ind.ma20!);
+  assert.ok(ind.atrPct! > 0);
+  assert.equal(ind.lastClose, 129);
+});
+
+function avgOf(from: number, to: number): number {
+  let s = 0;
+  for (let v = from; v <= to; v += 1) s += v;
+  return s / (to - from + 1);
+}
+
+test('indicators: 데이터 부족 시 null (전략 필터는 통과 처리)', () => {
+  const ind = computeDailyIndicators([candle(0, 100)]);
+  assert.equal(ind.ma20, null);
+  assert.equal(ind.rsi14, null);
+  assert.equal(ind.atrPct, null);
+});
+
+test('AsOfIndicatorStore: 해당일 이전 봉만 사용 (선견 편향 방지)', () => {
+  const dayKeyOf = (iso: string) => iso.slice(0, 10).replace(/-/g, '');
+  const candles = Array.from({ length: 25 }, (_, i) => candle(i, 100 + i));
+  const store = new AsOfIndicatorStore(new Map([['005930', candles]]), dayKeyOf);
+
+  // 21번째 날(day=20) 기준: 이전 20개 봉으로 MA20 계산 가능
+  const d20 = store.get('005930', dayKeyOf(candles[20]!.timestamp));
+  assert.ok(d20.ma20 !== null);
+  assert.equal(d20.lastClose, 119); // day 19 종가 — 당일(120)은 절대 포함 안 됨
+
+  // 5번째 날 기준: 봉 4개뿐 → MA20 null
+  const d4 = store.get('005930', dayKeyOf(candles[4]!.timestamp));
+  assert.equal(d4.ma20, null);
+});
+
+test('전략 지표 필터: RSI 과매도/MA20 추세 확인', () => {
+  const mr = byId('meanrevert');
+  const crossing = { ...CTX, prevRate: -0.01 };
+  // RSI 70 (과매도 아님) → meanrevert 진입 거부
+  assert.equal(
+    decide(tick(), -0.021, null, { ...crossing, daily: { ...emptyDaily, rsi14: 70 } }, mr), null);
+  // RSI 30 → 진입
+  assert.equal(
+    decide(tick(), -0.021, null, { ...crossing, daily: { ...emptyDaily, rsi14: 30 } }, mr)?.side, 'BUY');
+  // 지표 없으면 통과 (보조 확인 원칙)
+  assert.equal(decide(tick(), -0.021, null, crossing, mr)?.side, 'BUY');
+
+  const mo = byId('momentum');
+  const up = { ...CTX, prevRate: 0.01 };
+  // 주가(73400) < MA20(80000) → 추세 아님 → 거부
+  assert.equal(
+    decide(tick(), 0.021, null, { ...up, daily: { ...emptyDaily, ma20: 80000 } }, mo), null);
+  // 주가 > MA20 → 진입
+  assert.equal(
+    decide(tick(), 0.021, null, { ...up, daily: { ...emptyDaily, ma20: 70000 } }, mo)?.side, 'BUY');
+});
+
+test('deepdip: ATR 기반 동적 손절 — 변동성 크면 손절 폭 확대', () => {
+  const dd = byId('deepdip');
+  const highVol = { ...CTX, daily: { ...emptyDaily, atrPct: 4 } }; // 손절 = max(3, 6) = 6%
+  // 평단 70000, 현재 66500 = -5% : 고정 -3% 면 손절이지만 ATR 손절(-6%)로는 홀드
+  assert.equal(decide(tick({ price: 66500 }), 0, position(70000), highVol, dd), null);
+  // -6.5% 면 ATR 손절도 발동
+  assert.match(decide(tick({ price: 65400 }), 0, position(70000), highVol, dd)?.reason ?? '', /손절/);
+});
+
+const emptyDaily = {
+  ma20: null, ma60: null, rsi14: null, bbUpper: null, bbLower: null, atrPct: null, lastClose: null,
+};
 
 test('highbreak: 비대칭 청산 (+2% 익절 / -1% 손절)', () => {
   const def = byId('highbreak');

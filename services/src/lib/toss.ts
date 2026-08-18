@@ -199,6 +199,20 @@ export function fetchExchangeRate(): Promise<TossExchangeRate> {
   });
 }
 
+import type { DailyCandle } from '../domain/indicators.js';
+
+/** 토스 일봉을 지표 계산용 DailyCandle 로 변환 */
+export function toDailyCandle(c: TossCandle): DailyCandle {
+  return {
+    timestamp: c.timestamp,
+    open: Number(c.openPrice),
+    high: Number(c.highPrice),
+    low: Number(c.lowPrice),
+    close: Number(c.closePrice),
+    volume: Number(c.volume),
+  };
+}
+
 /** 일봉 조회. 전일 종가 계산용으로 최근 2개면 충분합니다. */
 export async function fetchDailyCandles(symbol: string, count = 2): Promise<TossCandle[]> {
   const page = await tossGet<{ candles: TossCandle[] }>('/api/v1/candles', {
