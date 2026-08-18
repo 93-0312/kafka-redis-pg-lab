@@ -4,6 +4,7 @@ import { STRATEGIES } from '../domain/strategy.js';
 import { createConsumer, onShutdown } from '../lib/kafka.js';
 import { K, PROCESSED_TTL_SEC } from '../lib/keys.js';
 import { createRedis } from '../lib/redis.js';
+import { startHeartbeat } from '../lib/heartbeat.js';
 import type { PaperOrderEvent, PaperTradeRecord } from '../types.js';
 
 const TRADES_MAX = 500;
@@ -53,6 +54,7 @@ async function record(
 
 async function main(): Promise<void> {
   const redis = createRedis('paper-exec');
+  startHeartbeat(redis, 'paper-exec');
   await ensureAccounts(redis);
 
   const consumer = await createConsumer('mktlab-paper-exec', config.kafka.groups.paperExec);

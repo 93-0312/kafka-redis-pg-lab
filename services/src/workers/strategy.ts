@@ -5,8 +5,9 @@ import { CtxTracker, STRATEGIES, decide, isStale, positionSize } from '../domain
 import { createConsumer, createProducer, onShutdown } from '../lib/kafka.js';
 import { K } from '../lib/keys.js';
 import { createRedis } from '../lib/redis.js';
+import { startHeartbeat } from '../lib/heartbeat.js';
 import { sendSlackMessage } from '../lib/slack.js';
-import { fetchExchangeRate } from '../lib/toss.js';
+import { fetchExchangeRate, fetchStockWarnings } from '../lib/toss.js';
 import type { PaperOrderEvent, PaperPosition, TickEvent } from '../types.js';
 
 /**
@@ -42,6 +43,36 @@ async function refreshFx(redis: ReturnType<typeof createRedis>): Promise<void> {
       if (cached > 0) usdKrw = cached;
     }
   }
+}
+
+/**
+ * 매수 유의 종목 필터.
+ * VI(변동성완화장치) 발동 중이거나 정리매매/투자위험 지정 종목은 신규 진입을 막습니다.
+ * 급등락 전략은 VI 에 자주 걸리는데, VI 중에는 2분 단일가 전환이라 즉시 체결 가정이 깨집니다.
+ * 결과는 2분 캐싱해서 rate limit 을 아낍니다.
+ */
+const BLOCKED_WARNINGS = new Set([
+  'VI_STATIC', 'VI_DYNAMIC', 'VI_STATIC_AND_DYNAMIC',
+  'LIQUIDATION_TRADING', 'INVESTMENT_RISK',
+]);
+const warningCache = new Map<string, { blocked: boolean; until: number }>();
+
+async function isTradeBlocked(symbol: string): Promise<boolean> {
+  const cached = warningCache.get(symbol);
+  if (cached && cached.until > Date.now()) return cached.blocked;
+
+  let blocked = false;
+  try {
+    const warnings = await fetchStockWarnings(symbol);
+    blocked = warnings.some((w) => BLOCKED_WARNINGS.has(w.warningType));
+    if (blocked) {
+      console.warn(`[strategy] ${symbol} 매수 유의(${warnings.map((w) => w.warningType).join(',')}) — 진입 차단`);
+    }
+  } catch {
+    // 조회 실패 시 차단하지 않습니다 (필터는 보조 장치, 파이프라인을 멈추지 않음)
+  }
+  warningCache.set(symbol, { blocked, until: Date.now() + 120_000 });
+  return blocked;
 }
 
 /** 전략 계좌의 현재 자산 (현금 + 보유 포지션의 원화 환산 평가액) */
@@ -114,6 +145,7 @@ async function loadPosition(
 
 async function main(): Promise<void> {
   const redis = createRedis('strategy');
+  startHeartbeat(redis, 'strategy');
   await refreshFx(redis);
   const fxTimer = setInterval(() => void refreshFx(redis), 30 * 60 * 1000);
 
@@ -166,6 +198,8 @@ async function main(): Promise<void> {
 
         // 일일 킬 스위치: 발동 시 신규 진입만 차단, 청산은 그대로 진행합니다.
         if (decision.side === 'BUY' && (await killSwitchActive(redis, def.id, dayKey))) continue;
+        // VI/정리매매/투자위험 종목 진입 차단 (전략 무관 공통 필터)
+        if (decision.side === 'BUY' && (await isTradeBlocked(tick.symbol))) continue;
 
         // 체결 반영 전 같은 전략×종목 중복 주문 방지
         const pending = await redis.set(K.paperPending(def.id, tick.symbol), '1', 'EX', 30, 'NX');

@@ -5,6 +5,7 @@ import { isStale } from '../domain/strategy.js';
 import { createConsumer, onShutdown } from '../lib/kafka.js';
 import { ALERT_LIST_MAX, K } from '../lib/keys.js';
 import { createRedis } from '../lib/redis.js';
+import { startHeartbeat } from '../lib/heartbeat.js';
 import { sendSlackAlert } from '../lib/slack.js';
 import type { PriceAlert, TickEvent } from '../types.js';
 
@@ -38,6 +39,7 @@ async function publish(redis: ReturnType<typeof createRedis>, alert: PriceAlert)
 
 async function main(): Promise<void> {
   const redis = createRedis('alert');
+  startHeartbeat(redis, 'alert');
   const consumer = await createConsumer('mktlab-alert', config.kafka.groups.alert);
 
   await consumer.subscribe({ topic: config.kafka.topic, fromBeginning: false });

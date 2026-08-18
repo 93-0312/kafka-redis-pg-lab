@@ -1,6 +1,8 @@
 import { config } from '../config.js';
+import { startHeartbeat } from '../lib/heartbeat.js';
 import { createConsumer, onShutdown } from '../lib/kafka.js';
 import { SCHEMA_SQL, createPool } from '../lib/pg.js';
+import { createRedis } from '../lib/redis.js';
 import type { TickEvent } from '../types.js';
 
 /**
@@ -14,6 +16,8 @@ import type { TickEvent } from '../types.js';
  */
 
 async function main(): Promise<void> {
+  const redis = createRedis('history');
+  startHeartbeat(redis, 'history');
   const pool = createPool();
   await pool.query(SCHEMA_SQL);
   console.log('[history] Postgres 스키마 확인 완료');
@@ -25,6 +29,7 @@ async function main(): Promise<void> {
   onShutdown(async () => {
     await consumer.disconnect();
     await pool.end();
+    redis.disconnect();
   });
 
   let inserted = 0;

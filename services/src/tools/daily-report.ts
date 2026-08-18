@@ -97,9 +97,16 @@ async function main(): Promise<void> {
     );
   }
 
+  // 워커 생존 점검: 죽어 있는 프로세스가 있으면 브리핑 맨 위에 경고를 띄웁니다.
+  const { checkHeartbeats } = await import('../lib/heartbeat.js');
+  const workers = await checkHeartbeats(redis);
+  const healthLine = workers.dead.length > 0
+    ? `🚨 *워커 다운: ${workers.dead.join(', ')}* — 파이프라인 점검 필요\n`
+    : '';
+
   const today = new Date();
   const title = `📊 페이퍼 트레이딩 아침 브리핑 — ${today.getMonth() + 1}/${today.getDate()} 07:30`;
-  const body = lines.join('\n');
+  const body = healthLine + lines.join('\n');
   const footer = `24h 총 체결 ${totalFills24h}건 · 전략별 시작 자금 1억 · ⚠️ 학습용 시뮬레이션 (실주문 없음)`;
 
   const ok = await sendSlackMessage(`${title}\n${body}`, [

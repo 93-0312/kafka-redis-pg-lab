@@ -2,6 +2,7 @@ import cors from 'cors';
 import express from 'express';
 import type { Request, Response } from 'express';
 import { config } from '../config.js';
+import { checkHeartbeats, startHeartbeat } from '../lib/heartbeat.js';
 import { K } from '../lib/keys.js';
 import { createRedis } from '../lib/redis.js';
 import { readPaper } from './paper.js';
@@ -31,8 +32,16 @@ function broadcast(event: string, data: string): void {
   }
 }
 
-app.get('/api/health', (_req: Request, res: Response) => {
-  res.json({ ok: true, redis: redis.status, clients: clients.size });
+startHeartbeat(redis, 'api');
+
+app.get('/api/health', async (_req: Request, res: Response) => {
+  const workers = await checkHeartbeats(redis);
+  res.json({
+    ok: workers.dead.length === 0,
+    redis: redis.status,
+    clients: clients.size,
+    workers,
+  });
 });
 
 app.get('/api/summary', async (req: Request, res: Response) => {

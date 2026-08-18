@@ -179,6 +179,18 @@ export function fetchHoldings(accountSeq: number): Promise<TossHoldingsOverview>
   });
 }
 
+export interface TossStockWarning {
+  warningType: string;
+  exchange?: string | null;
+  startDate?: string | null;
+  endDate?: string | null;
+}
+
+/** 매수 유의사항 조회 (VI 발동, 정리매매, 투자경고/위험 등) */
+export function fetchStockWarnings(symbol: string): Promise<TossStockWarning[]> {
+  return tossGet<TossStockWarning[]>(`/api/v1/stocks/${encodeURIComponent(symbol)}/warnings`);
+}
+
 /** USD→KRW 환율 조회 */
 export function fetchExchangeRate(): Promise<TossExchangeRate> {
   return tossGet<TossExchangeRate>('/api/v1/exchange-rate', {

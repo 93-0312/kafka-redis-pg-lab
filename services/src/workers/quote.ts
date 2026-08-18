@@ -3,6 +3,7 @@ import { changeRate, dateKey, mergeCandle, minuteBucket } from '../domain/quotes
 import { createConsumer, onShutdown } from '../lib/kafka.js';
 import { K, PROCESSED_TTL_SEC } from '../lib/keys.js';
 import { createRedis } from '../lib/redis.js';
+import { startHeartbeat } from '../lib/heartbeat.js';
 import type { MinuteCandle, TickEvent } from '../types.js';
 
 const CANDLE_TTL = 60 * 60 * 48;
@@ -16,6 +17,7 @@ const CANDLE_TTL = 60 * 60 * 48;
  */
 async function main(): Promise<void> {
   const redis = createRedis('quote');
+  startHeartbeat(redis, 'quote');
   const consumer = await createConsumer('mktlab-quote', config.kafka.groups.quote);
 
   await consumer.subscribe({ topic: config.kafka.topic, fromBeginning: true });

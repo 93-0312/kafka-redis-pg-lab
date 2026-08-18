@@ -2,7 +2,9 @@ import { randomUUID } from 'node:crypto';
 import type { Producer } from 'kafkajs';
 import { config } from '../config.js';
 import { dateKey, pickPrevClose } from '../domain/quotes.js';
+import { startHeartbeat } from '../lib/heartbeat.js';
 import { createProducer, onShutdown } from '../lib/kafka.js';
+import { createRedis } from '../lib/redis.js';
 import { fetchDailyCandles, fetchPrices, fetchStocks } from '../lib/toss.js';
 import type { Market, TickEvent } from '../types.js';
 
@@ -92,9 +94,12 @@ async function main(): Promise<void> {
   );
 
   const producer = await createProducer('mktlab-producer');
+  const redis = createRedis('producer');
+  startHeartbeat(redis, 'producer');
   onShutdown(async () => {
     clearInterval(metaTimer);
     await producer.disconnect();
+    redis.disconnect();
   });
 
   let sent = 0;
