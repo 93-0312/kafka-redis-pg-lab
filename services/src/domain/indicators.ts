@@ -62,7 +62,8 @@ export function computeDailyIndicators(candles: DailyCandle[]): DailyIndicators 
     bbLower = ma20 - 2 * sd;
   }
 
-  // RSI(14) — Wilder 평활
+  // RSI(14) — 단순평균 방식 (Cutler's RSI). Wilder 지수평활과 값이 다소 다르지만
+  // 과매도/과열 판정 용도로는 동등하며, 시드 이력 없이 계산 가능해 채택.
   let rsi14: number | null = null;
   if (closes.length >= 15) {
     let gain = 0;
