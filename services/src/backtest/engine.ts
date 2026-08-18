@@ -27,6 +27,19 @@ export interface BacktestConfig {
   markets: Market[];
   /** USD→KRW 고정 환율 (근사) */
   usdKrw: number;
+  /**
+   * 거래비용 모델 (편도 기준 %).
+   * scalper 처럼 익절 폭이 좁은 전략은 비용을 넣는 순간 기대값이 뒤집힐 수 있어서,
+   * 비용 없는 백테스트 결과는 판단 근거로 쓸 수 없습니다.
+   */
+  costs: {
+    /** 위탁 수수료 (매수·매도 각각) */
+    feePct: number;
+    /** 국내 주식 매도 시 거래세+농특세 (미국은 미적용) */
+    krSellTaxPct: number;
+    /** 슬리피지 추정 (매수·매도 각각) */
+    slippagePct: number;
+  };
 }
 
 export interface BacktestTrade {
@@ -46,6 +59,8 @@ export interface StrategyResult {
   finalEquity: number;
   totalReturn: number;
   realizedPnl: number;
+  /** 수수료+거래세+슬리피지 누계 (원화) */
+  costsPaid: number;
   fills: number;
   sells: number;
   wins: number;
@@ -57,12 +72,16 @@ export interface StrategyResult {
   trades: BacktestTrade[];
 }
 
+/** 포지션 + 매수에 실제로 나간 현금(비용 포함). 실현손익 = 순매도대금 - costKrw */
+type SimPosition = PaperPosition & { costKrw: number };
+
 interface SimAccount {
   cash: number;
-  positions: Map<string, PaperPosition>;
+  positions: Map<string, SimPosition>;
   cooldownUntil: Map<string, number>;
   trades: BacktestTrade[];
   realizedPnl: number;
+  costsPaid: number;
   wins: number;
   sells: number;
   peak: number;
@@ -86,6 +105,7 @@ export function runBacktest(
         cooldownUntil: new Map(),
         trades: [],
         realizedPnl: 0,
+        costsPaid: 0,
         wins: 0,
         sells: 0,
         peak: cfg.initialCash,
@@ -112,7 +132,7 @@ export function runBacktest(
     lastPrice.set(tick.symbol, { price: tick.price, fx });
 
     const rate = changeRate(tick.price, tick.prevClose);
-    const ctx = tracker.next(tick, dateKey(tick.polledAt));
+    const ctx = tracker.next(tick, dateKey(tick.polledAt), rate);
 
     for (const def of defs) {
       const acc = accounts.get(def.id)!;
@@ -125,7 +145,10 @@ export function runBacktest(
         const quantity = positionSize(acc.cash, cfg.positionPct, tick.price * fx);
         if (quantity < 1) continue;
 
-        acc.cash -= quantity * tick.price * fx;
+        const gross = quantity * tick.price * fx;
+        const buyCost = gross * (cfg.costs.feePct + cfg.costs.slippagePct) / 100;
+        acc.cash -= gross + buyCost;
+        acc.costsPaid += buyCost;
         acc.positions.set(tick.symbol, {
           symbol: tick.symbol,
           name: tick.name,
@@ -134,6 +157,7 @@ export function runBacktest(
           quantity,
           avgPrice: tick.price,
           openedAt: tick.polledAt,
+          costKrw: gross + buyCost,
         });
         acc.cooldownUntil.set(tick.symbol, now + cfg.cooldownSec * 1000);
         acc.trades.push({
@@ -141,15 +165,23 @@ export function runBacktest(
           side: 'BUY', quantity, price: tick.price, reason: decision.reason,
         });
       } else if (decision?.side === 'SELL' && position) {
-        const realized = (tick.price - position.avgPrice) * position.quantity * fx;
-        acc.cash += position.quantity * tick.price * fx;
+        const simPos = position as SimPosition;
+        const gross = simPos.quantity * tick.price * fx;
+        const sellTax = tick.market === 'KR' ? cfg.costs.krSellTaxPct : 0;
+        const sellCost = gross * (cfg.costs.feePct + cfg.costs.slippagePct + sellTax) / 100;
+        const net = gross - sellCost;
+        // 실현손익 = 순매도대금 - 매수 총지출(비용 포함)
+        const realized = net - simPos.costKrw;
+
+        acc.cash += net;
+        acc.costsPaid += sellCost;
         acc.positions.delete(tick.symbol);
         acc.realizedPnl += realized;
         acc.sells += 1;
         if (realized > 0) acc.wins += 1;
         acc.trades.push({
           time: tick.polledAt, symbol: tick.symbol, name: tick.name,
-          side: 'SELL', quantity: position.quantity, price: tick.price,
+          side: 'SELL', quantity: simPos.quantity, price: tick.price,
           realizedPnl: realized, reason: decision.reason,
         });
       }
@@ -173,6 +205,7 @@ export function runBacktest(
       finalEquity,
       totalReturn: (finalEquity - cfg.initialCash) / cfg.initialCash,
       realizedPnl: acc.realizedPnl,
+      costsPaid: acc.costsPaid,
       fills: acc.trades.length,
       sells: acc.sells,
       wins: acc.wins,

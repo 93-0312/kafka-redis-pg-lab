@@ -103,7 +103,7 @@ test('buildSpikeAlert: 급변 방향과 폭이 메시지에 담긴다', () => {
 
 // ── 페이퍼 트레이딩 전략 ─────────────────────────────────
 
-const CTX: MarketCtx = { shortChange: null, dayHigh: null };
+const CTX: MarketCtx = { shortChange: null, dayHigh: null, prevRate: null, prevShortChange: null };
 const byId = (id: string) => {
   const def = STRATEGIES.find((s) => s.id === id);
   assert.ok(def, `전략 없음: ${id}`);
@@ -121,29 +121,44 @@ test('전략 5개가 등록되어 있다', () => {
   );
 });
 
-test('meanrevert: -2% 이하 급락에서만 매수', () => {
+test('meanrevert: -2% 를 "새로" 하향 돌파하는 순간에만 매수 (크로싱)', () => {
   const def = byId('meanrevert');
-  assert.equal(decide(tick(), -0.021, null, CTX, def)?.side, 'BUY');
-  assert.equal(decide(tick(), -0.019, null, CTX, def), null);
-  assert.equal(decide(tick(), 0.03, null, CTX, def), null);
+  // 직전 -1% → 현재 -2.1%: 돌파 순간 → 매수
+  assert.equal(decide(tick(), -0.021, null, { ...CTX, prevRate: -0.01 }, def)?.side, 'BUY');
+  // 직전 -3% → 현재 -2.1%: 이미 아래에 있던 상태 → 관망 (레벨 조건 결함 방지)
+  assert.equal(decide(tick(), -0.021, null, { ...CTX, prevRate: -0.03 }, def), null);
+  // 당일 첫 틱(prevRate null): 갭 하락 시가로는 진입하지 않음
+  assert.equal(decide(tick(), -0.021, null, CTX, def), null);
+  // 임계 미달
+  assert.equal(decide(tick(), -0.019, null, { ...CTX, prevRate: -0.01 }, def), null);
 });
 
-test('momentum: +2% 이상 돌파에서만 매수', () => {
+test('momentum: +2% 상향 돌파 순간에만 매수 (크로싱)', () => {
   const def = byId('momentum');
-  assert.equal(decide(tick(), 0.021, null, CTX, def)?.side, 'BUY');
-  assert.equal(decide(tick(), -0.03, null, CTX, def), null);
+  assert.equal(decide(tick(), 0.021, null, { ...CTX, prevRate: 0.01 }, def)?.side, 'BUY');
+  assert.equal(decide(tick(), 0.021, null, { ...CTX, prevRate: 0.03 }, def), null); // 이미 위
+  assert.equal(decide(tick(), 0.021, null, CTX, def), null); // 첫 틱
 });
 
-test('deepdip: -4% 이하에서만 매수 (meanrevert 보다 보수적)', () => {
+test('deepdip: -4% 하향 돌파 순간에만 매수', () => {
   const def = byId('deepdip');
-  assert.equal(decide(tick(), -0.041, null, CTX, def)?.side, 'BUY');
-  assert.equal(decide(tick(), -0.03, null, CTX, def), null);
+  assert.equal(decide(tick(), -0.041, null, { ...CTX, prevRate: -0.035 }, def)?.side, 'BUY');
+  assert.equal(decide(tick(), -0.041, null, { ...CTX, prevRate: -0.05 }, def), null);
+  assert.equal(decide(tick(), -0.03, null, { ...CTX, prevRate: -0.01 }, def), null);
 });
 
-test('scalper: 1분 내 +0.3% 급등에서만 매수', () => {
+test('scalper: 1분 변화율이 +0.3% 를 상향 돌파하는 순간에만 매수', () => {
   const def = byId('scalper');
-  assert.equal(decide(tick(), 0, null, { ...CTX, shortChange: 0.004 }, def)?.side, 'BUY');
-  assert.equal(decide(tick(), 0, null, { ...CTX, shortChange: 0.002 }, def), null);
+  assert.equal(
+    decide(tick(), 0, null, { ...CTX, shortChange: 0.004, prevShortChange: 0.002 }, def)?.side,
+    'BUY',
+  );
+  // 이미 +0.3% 위에 있던 상태 → 관망
+  assert.equal(
+    decide(tick(), 0, null, { ...CTX, shortChange: 0.004, prevShortChange: 0.0035 }, def),
+    null,
+  );
+  assert.equal(decide(tick(), 0, null, { ...CTX, shortChange: 0.002, prevShortChange: 0 }, def), null);
   assert.equal(decide(tick(), 0, null, CTX, def), null); // 기준가 없으면 관망
 });
 

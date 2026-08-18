@@ -97,7 +97,7 @@ async function main(): Promise<void> {
       if (fxRate <= 0) return;
 
       const rate = changeRate(tick.price, tick.prevClose);
-      const ctx = ctxTracker.next(tick, dateKey(tick.polledAt));
+      const ctx = ctxTracker.next(tick, dateKey(tick.polledAt), rate);
 
       for (const def of STRATEGIES) {
         const position = await loadPosition(redis, def.id, tick.symbol);

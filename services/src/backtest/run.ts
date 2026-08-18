@@ -57,6 +57,7 @@ function printResults(results: StrategyResult[]): void {
     '전략'.padEnd(10),
     '수익률'.padStart(8),
     '실현손익'.padStart(12),
+    '거래비용'.padStart(11),
     'MDD'.padStart(7),
     '체결'.padStart(5),
     '청산'.padStart(5),
@@ -68,6 +69,7 @@ function printResults(results: StrategyResult[]): void {
       r.label.padEnd(10),
       pct(r.totalReturn).padStart(8),
       krw(r.realizedPnl).padStart(12),
+      krw(r.costsPaid).padStart(11),
       `-${(r.maxDrawdown * 100).toFixed(2)}%`.padStart(7),
       String(r.fills).padStart(5),
       String(r.sells).padStart(5),
@@ -77,17 +79,21 @@ function printResults(results: StrategyResult[]): void {
   }
 }
 
-/** 진입 임계(등락률 기반 전략)·익절·손절을 바꾼 변형 전략을 만듭니다. */
+/** 진입 임계(등락률 기반 전략)·익절·손절을 바꾼 변형 전략을 만듭니다. 진입은 크로싱 기준. */
 function makeVariant(base: StrategyDef, entryPct: number, tp: number, sl: number): StrategyDef {
   const dir = base.id === 'momentum' ? 1 : -1; // meanrevert/deepdip 는 하락 진입
+  const th = (dir * entryPct) / 100;
   return {
     ...base,
     id: `${base.id}(e${entryPct},tp${tp},sl${sl})`,
     label: `e±${entryPct} tp${tp} sl${sl}`,
-    entry: (_t, rate) =>
-      dir > 0
-        ? rate >= entryPct / 100 ? `진입 ${pct(rate)}` : null
-        : rate <= -entryPct / 100 ? `진입 ${pct(rate)}` : null,
+    entry: (_t, rate, ctx) => {
+      if (ctx.prevRate === null) return null;
+      const crossed = dir > 0
+        ? ctx.prevRate < th && rate >= th
+        : ctx.prevRate > th && rate <= th;
+      return crossed ? `진입 ${pct(rate)} (${dir > 0 ? '+' : '-'}${entryPct}% 돌파)` : null;
+    },
     takeProfitPct: tp,
     stopLossPct: sl,
   };
@@ -112,6 +118,17 @@ async function main(): Promise<void> {
     `틱 ${ticks.length.toLocaleString('ko-KR')}건 · ${ticks[0]!.polledAt.slice(0, 16)} ~ ${ticks[ticks.length - 1]!.polledAt.slice(0, 16)}\n`,
   );
 
+  // 거래비용 (편도 %). --fee/--tax/--slip 로 조정, --no-costs 로 0 처리
+  const noCosts = process.argv.includes('--no-costs');
+  const costs = {
+    feePct: noCosts ? 0 : Number(arg('fee') ?? 0.015),
+    krSellTaxPct: noCosts ? 0 : Number(arg('tax') ?? 0.15),
+    slippagePct: noCosts ? 0 : Number(arg('slip') ?? 0.05),
+  };
+  console.log(
+    `비용 모델: 수수료 ${costs.feePct}%/편도 · 국내 매도세 ${costs.krSellTaxPct}% · 슬리피지 ${costs.slippagePct}%/편도\n`,
+  );
+
   const cfg: BacktestConfig = {
     initialCash: config.paper.initialCash,
     positionPct: config.paper.positionPct,
@@ -120,6 +137,7 @@ async function main(): Promise<void> {
     staleTickSec: config.paper.staleTickSec,
     markets,
     usdKrw: 1410,
+    costs,
   };
 
   if (sweep) {

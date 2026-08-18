@@ -4,6 +4,8 @@ import { STRATEGIES } from '../domain/strategy.js';
 import type { TickEvent } from '../types.js';
 import { runBacktest, type BacktestConfig } from './engine.js';
 
+const NO_COSTS = { feePct: 0, krSellTaxPct: 0, slippagePct: 0 };
+
 const CFG: BacktestConfig = {
   initialCash: 100_000_000,
   positionPct: 10,
@@ -12,6 +14,7 @@ const CFG: BacktestConfig = {
   staleTickSec: 600,
   markets: ['KR'],
   usdKrw: 1400,
+  costs: NO_COSTS,
 };
 
 /** polledAt = tradedAt (신선한 틱) */
@@ -53,8 +56,9 @@ test('engine: 급락 매수 → 반등 익절 사이클', () => {
 
 test('engine: 손절과 MDD 기록', () => {
   const ticks = [
-    tick(0, 97_000),   // -3% — 진입 (103주)
-    tick(3, 95_000),   // 평단 대비 -2.06% — 손절
+    tick(0, 100_000),  // 0% — 기준 수립 (크로싱 감지용)
+    tick(3, 97_000),   // -3% 하향 돌파 — 진입 (103주)
+    tick(6, 95_000),   // 평단 대비 -2.06% — 손절
   ];
   const [r] = runBacktest(ticks, meanrevert, CFG);
   assert.ok(r);
@@ -64,15 +68,36 @@ test('engine: 손절과 MDD 기록', () => {
   assert.ok(r.maxDrawdown > 0);
 });
 
-test('engine: 쿨다운 안에는 재진입하지 않는다', () => {
+test('engine: 손절 후 계속 -2% 아래면 재진입하지 않는다 (크로싱)', () => {
   const ticks = [
-    tick(0, 97_000),   // 진입
-    tick(3, 95_000),   // 손절
-    tick(6, 94_000),   // -6% 지만 쿨다운(600초) 중 — 재진입 금지
+    tick(0, 100_000),  // 기준
+    tick(3, 97_000),   // -3% 돌파 — 진입
+    tick(6, 95_000),   // 손절
+    tick(9, 94_000),   // -6% 지만 "이미 아래" 상태 — 크로싱 아님 + 쿨다운
+    tick(12, 93_000),  // 계속 하락 — 여전히 재진입 없음 (하락 추세 연속 손절 방지)
   ];
   const [r] = runBacktest(ticks, meanrevert, CFG);
   assert.ok(r);
   assert.equal(r.fills, 2); // BUY 1 + SELL 1 뿐
+});
+
+test('engine: 거래비용이 실현손익을 갉아먹는다', () => {
+  const costCfg: BacktestConfig = {
+    ...CFG,
+    costs: { feePct: 0.015, krSellTaxPct: 0.15, slippagePct: 0.05 },
+  };
+  const ticks = [
+    tick(0, 100_000),
+    tick(3, 97_000),   // 진입 103주
+    tick(6, 99_000),   // +2.06% 익절
+  ];
+  const [free] = runBacktest(ticks, meanrevert, CFG);
+  const [paid] = runBacktest(ticks, meanrevert, costCfg);
+  assert.ok(free && paid);
+  assert.ok(paid.costsPaid > 0);
+  // 왕복 비용 ≈ 매수 0.065% + 매도 0.215% — 비용 반영 실현손익이 정확히 그만큼 작아야 함
+  assert.ok(paid.realizedPnl < free.realizedPnl);
+  assert.ok(Math.abs(free.realizedPnl - paid.realizedPnl - paid.costsPaid) < 1);
 });
 
 test('engine: 낡은 틱(장 마감 정지 시세)은 무시', () => {
