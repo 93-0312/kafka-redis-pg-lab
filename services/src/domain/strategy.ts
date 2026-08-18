@@ -79,15 +79,17 @@ export const STRATEGIES: StrategyDef[] = [
   },
   {
     id: 'scalper',
-    label: '초단타',
-    description: '1분 +0.3% 상향 돌파 "순간" 편승 · 익절 +0.5% / 손절 -0.5% (거래비용 취약 — 백테스트로 존폐 검증 중)',
+    label: '단기모멘텀',
+    description:
+      '1분 +0.3% 상향 돌파 "순간" 편승 · 익절 +1.5% / 손절 -1.5% ' +
+      '(구 ±0.5% 는 왕복 비용 ~0.27% 에 잠식되어 기대값 음수 — 비용의 5배 이상으로 재설계)',
     entry: (_t, _rate, ctx) =>
       ctx.shortChange !== null &&
       crossedUp(ctx.prevShortChange, ctx.shortChange, 0.003)
         ? `급등 편승: 1분 내 ${pct(ctx.shortChange)} (+0.3% 상향 돌파)`
         : null,
-    takeProfitPct: 0.5,
-    stopLossPct: 0.5,
+    takeProfitPct: 1.5,
+    stopLossPct: 1.5,
   },
   {
     id: 'highbreak',
