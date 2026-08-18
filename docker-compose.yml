@@ -1,0 +1,85 @@
+# Kafka 4.x는 KRaft 모드로 동작하므로 ZooKeeper가 필요 없습니다.
+# 브로커 1대 + Redis 1대 + Kafka UI 구성입니다. 학습용이므로 인증은 걸지 않았습니다.
+#
+# ★ 리스너를 두 개 두는 이유 ★
+# Kafka 클라이언트는 처음에 bootstrap 서버로 접속한 뒤, 브로커가 알려주는
+# "advertised address" 로 다시 접속합니다. 그런데 그 주소가
+#   - 호스트(내 PC)의 npm 프로세스 입장에서는  localhost:9092
+#   - 도커 네트워크 안의 kafka-ui 입장에서는   kafka:29092
+# 로 서로 다릅니다. 하나만 두면 반드시 한쪽이 접속에 실패합니다.
+# 그래서 내부용(PLAINTEXT)과 호스트용(PLAINTEXT_HOST) 리스너를 분리합니다.
+services:
+  kafka:
+    image: apache/kafka:4.0.0
+    container_name: pglab-kafka
+    ports:
+      - "9092:9092" # 호스트에서 접속하는 포트. 29092는 도커 내부 전용이라 노출하지 않습니다.
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:29092,PLAINTEXT_HOST://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      # 학습 중 토픽을 자주 지웠다 만들 것이므로 자동 생성을 켭니다.
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_RETENTION_HOURS: 168
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+
+  redis:
+    image: redis:7-alpine
+    container_name: pglab-redis
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # 시세 히스토리 영구 저장소. Kafka 는 30일 버퍼, 장기 축적·질의는 Postgres 가 담당합니다.
+  postgres:
+    image: postgres:16-alpine
+    container_name: pglab-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: mktlab
+      POSTGRES_PASSWORD: mktlab
+      POSTGRES_DB: mktlab
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mktlab"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # 토픽/파티션/컨슈머 그룹 오프셋을 눈으로 확인할 수 있는 UI. http://localhost:8080
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: pglab-kafka-ui
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: pglab
+      # 도커 네트워크 안이므로 내부 리스너(29092)로 접속합니다.
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      DYNAMIC_CONFIG_ENABLED: "true"
+
+volumes:
+  pgdata:

@@ -1,0 +1,48 @@
+{
+  "name": "mktlab-services",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "setup": "tsx src/tools/admin.ts create-topic",
+    "dev": "concurrently -k -n api,quote,alert,strategy,paper,history,producer -c blue,green,yellow,cyan,white,gray,magenta npm:dev:api npm:dev:quote npm:dev:alert npm:dev:strategy npm:dev:paper npm:dev:history npm:dev:producer",
+    "dev:api": "tsx watch --clear-screen=false --include ../.env src/api/server.ts",
+    "dev:quote": "tsx watch --clear-screen=false --include ../.env src/workers/quote.ts",
+    "dev:alert": "tsx watch --clear-screen=false --include ../.env src/workers/alert.ts",
+    "dev:strategy": "tsx watch --clear-screen=false --include ../.env src/workers/strategy.ts",
+    "dev:paper": "tsx watch --clear-screen=false --include ../.env src/workers/paper-exec.ts",
+    "dev:history": "tsx watch --clear-screen=false --include ../.env src/workers/history.ts",
+    "dev:producer": "tsx watch --clear-screen=false --include ../.env src/producer/index.ts",
+    "producer": "tsx src/producer/index.ts",
+    "quote": "tsx src/workers/quote.ts",
+    "alert": "tsx src/workers/alert.ts",
+    "strategy": "tsx src/workers/strategy.ts",
+    "paper": "tsx src/workers/paper-exec.ts",
+    "history": "tsx src/workers/history.ts",
+    "api": "tsx src/api/server.ts",
+    "backtest": "tsx src/backtest/run.ts",
+    "seed": "tsx src/tools/seed.ts seed",
+    "replay": "tsx src/tools/admin.ts replay",
+    "lag": "tsx src/tools/admin.ts lag",
+    "reset": "tsx src/tools/admin.ts reset",
+    "test": "tsx --test src/domain/*.test.ts src/backtest/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "ioredis": "^5.4.2",
+    "kafkajs": "^2.2.4",
+    "pg": "^8.23.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.10.0",
+    "@types/pg": "^8.23.1",
+    "concurrently": "^10.0.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
