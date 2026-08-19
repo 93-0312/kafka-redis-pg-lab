@@ -3,6 +3,15 @@ import { dateKey } from '../domain/quotes.js';
 import { K } from '../lib/keys.js';
 import type { Currency, Market, MinuteCandle, QuoteSnapshot } from '../types.js';
 
+export interface FocusIndicators {
+  ma20: number | null;
+  ma60: number | null;
+  rsi14: number | null;
+  bbUpper: number | null;
+  bbLower: number | null;
+  atrPct: number | null;
+}
+
 export interface DashboardSummary {
   quotes: QuoteSnapshot[];
   totals: {
@@ -14,6 +23,8 @@ export interface DashboardSummary {
   /** focus 종목의 1분봉 (최근 60분) */
   focus: string | null;
   candles: ({ t: string } & MinuteCandle)[];
+  /** focus 종목의 일봉 지표 (전략 워커가 30분마다 게시한 as-of 값) */
+  indicators: FocusIndicators | null;
   generatedAt: string;
 }
 
@@ -59,13 +70,28 @@ export async function readSummary(redis: Redis, focusParam?: string): Promise<Da
   // focus 종목의 1분봉 차트 데이터
   const focus = focusParam && symbols.includes(focusParam) ? focusParam : (quotes[0]?.symbol ?? null);
   let candles: DashboardSummary['candles'] = [];
+  let indicators: FocusIndicators | null = null;
   if (focus) {
     const raw = await redis.hgetall(K.candle(focus, dateKey()));
     candles = Object.entries(raw)
       .map(([t, v]) => ({ t, ...(JSON.parse(v) as MinuteCandle) }))
       .sort((a, b) => a.t.localeCompare(b.t))
       .slice(-60);
+
+    const ind = await redis.hgetall(K.indicators(focus));
+    if (ind['updatedAt']) {
+      const opt = (v: string | undefined): number | null =>
+        v !== undefined && v !== '' && Number.isFinite(Number(v)) ? Number(v) : null;
+      indicators = {
+        ma20: opt(ind['ma20']),
+        ma60: opt(ind['ma60']),
+        rsi14: opt(ind['rsi14']),
+        bbUpper: opt(ind['bbUpper']),
+        bbLower: opt(ind['bbLower']),
+        atrPct: opt(ind['atrPct']),
+      };
+    }
   }
 
-  return { quotes, totals, focus, candles, generatedAt: new Date().toISOString() };
+  return { quotes, totals, focus, candles, indicators, generatedAt: new Date().toISOString() };
 }

@@ -1,6 +1,6 @@
 import { config } from '../config.js';
-import { startHeartbeat } from '../lib/heartbeat.js';
-import { createConsumer, onShutdown } from '../lib/kafka.js';
+import { markProgress, startHeartbeat } from '../lib/heartbeat.js';
+import { onShutdown, runResilientConsumer } from '../lib/kafka.js';
 import { SCHEMA_SQL, createPool } from '../lib/pg.js';
 import { createRedis } from '../lib/redis.js';
 import type { TickEvent } from '../types.js';
@@ -22,12 +22,9 @@ async function main(): Promise<void> {
   await pool.query(SCHEMA_SQL);
   console.log('[history] Postgres 스키마 확인 완료');
 
-  const consumer = await createConsumer('mktlab-history', config.kafka.groups.history);
-  await consumer.subscribe({ topic: config.kafka.topic, fromBeginning: true });
   console.log(`[history] group=${config.kafka.groups.history} 구독 시작 → Postgres 적재`);
 
   onShutdown(async () => {
-    await consumer.disconnect();
     await pool.end();
     redis.disconnect();
   });
@@ -35,7 +32,12 @@ async function main(): Promise<void> {
   let inserted = 0;
   let duplicates = 0;
 
-  await consumer.run({
+  await runResilientConsumer({
+    clientId: 'mktlab-history',
+    groupId: config.kafka.groups.history,
+    topic: config.kafka.topic,
+    fromBeginning: true,
+    onProgress: () => markProgress(redis, 'history'),
     eachMessage: async ({ message }) => {
       if (!message.value) return;
       const t = JSON.parse(message.value.toString()) as TickEvent;

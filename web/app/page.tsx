@@ -127,13 +127,33 @@ export default function Page() {
           )}
         </p>
         <p className="panel-desc">
-          quote 워커가 틱 스트림을 롤업한 캔들(<code>mkt:candle:*</code>)입니다. 점선은 전일 종가.
+          quote 워커가 틱 스트림을 롤업한 캔들(<code>mkt:candle:*</code>)입니다. 회색 점선은 전일 종가,
+          노랑은 MA20, 보라는 볼린저밴드(20, 2σ) — 전일까지의 일봉으로 계산한 값입니다.
+          {summary?.indicators && (
+            <span style={{ marginLeft: 8 }}>
+              {summary.indicators.rsi14 !== null && (
+                <span
+                  className="badge KR"
+                  style={{ marginRight: 6 }}
+                  title="RSI(14) — 30 이하 과매도 / 70 이상 과열"
+                >
+                  RSI {summary.indicators.rsi14.toFixed(0)}
+                </span>
+              )}
+              {summary.indicators.atrPct !== null && (
+                <span className="badge US" title="ATR(14) — 하루 평균 변동폭 (종가 대비 %)">
+                  ATR {summary.indicators.atrPct.toFixed(1)}%
+                </span>
+              )}
+            </span>
+          )}
         </p>
         {focusQuote ? (
           <PriceChart
             data={summary?.candles ?? []}
             currency={focusQuote.currency}
             prevClose={focusQuote.prevClose}
+            indicators={summary?.indicators}
           />
         ) : (
           <div className="empty">차트를 불러오는 중…</div>

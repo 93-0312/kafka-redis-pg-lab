@@ -28,3 +28,26 @@ export async function checkHeartbeats(redis: Redis): Promise<{ alive: string[]; 
   }
   return { alive, dead };
 }
+
+/** market.ticks 를 소비하는 워커들 — producer 가 도는 한 항상 진행 중이어야 정상 */
+export const TICK_CONSUMERS = ['quote', 'alert', 'strategy', 'history'] as const;
+
+const lastMark = new Map<string, number>();
+
+/** 메시지 처리 진행률 기록 (5초 스로틀). 스톨 감지의 근거가 됩니다. */
+export function markProgress(redis: Redis, name: string): void {
+  const now = Date.now();
+  if (now - (lastMark.get(name) ?? 0) < 5_000) return;
+  lastMark.set(name, now);
+  redis.set(K.progress(name), new Date(now).toISOString(), 'EX', 600).catch(() => undefined);
+}
+
+/** 컨슈머별 마지막 처리 후 경과(초). 기록이 없으면 null */
+export async function checkProgress(redis: Redis): Promise<Record<string, number | null>> {
+  const out: Record<string, number | null> = {};
+  for (const name of TICK_CONSUMERS) {
+    const iso = await redis.get(K.progress(name));
+    out[name] = iso ? Math.round((Date.now() - Date.parse(iso)) / 1000) : null;
+  }
+  return out;
+}

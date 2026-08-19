@@ -2,7 +2,7 @@ import cors from 'cors';
 import express from 'express';
 import type { Request, Response } from 'express';
 import { config } from '../config.js';
-import { checkHeartbeats, startHeartbeat } from '../lib/heartbeat.js';
+import { checkHeartbeats, checkProgress, startHeartbeat } from '../lib/heartbeat.js';
 import { K } from '../lib/keys.js';
 import { createRedis } from '../lib/redis.js';
 import { readPaper } from './paper.js';
@@ -36,11 +36,20 @@ startHeartbeat(redis, 'api');
 
 app.get('/api/health', async (_req: Request, res: Response) => {
   const workers = await checkHeartbeats(redis);
+  // 진행률: 하트비트(생존)와 별개로 "실제로 소비 중인가". producer 가 3초마다
+  // 발행하므로 틱 컨슈머가 180초 이상 조용하면 스톨로 판정합니다.
+  const progress = await checkProgress(redis);
+  const stalled = Object.entries(progress)
+    .filter(([, age]) => age === null || age > 180)
+    .map(([name]) => name);
   res.json({
-    ok: workers.dead.length === 0,
+    ok: workers.dead.length === 0 && stalled.length === 0,
     redis: redis.status,
     clients: clients.size,
     workers,
+    /** 컨슈머별 마지막 메시지 처리 후 경과(초) */
+    progressAgeSec: progress,
+    stalled,
   });
 });
 

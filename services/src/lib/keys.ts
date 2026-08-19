@@ -28,6 +28,9 @@ export const K = {
   /** STRING: USD→KRW 환율 (매매기준율). strategy 워커가 주기적으로 갱신 */
   fxUsdKrw: 'mkt:fx:usdkrw',
 
+  /** HASH: 종목별 일봉 지표 (as-of 오늘). strategy 워커가 30분마다 게시, 대시보드가 표시 */
+  indicators: (symbol: string) => `mkt:indicators:${symbol}`,
+
   /** HASH: 전략별 페이퍼 계좌 (cash, initialCash, startedAt) */
   paperAccount: (strategy: string) => `mkt:paper:${strategy}:account`,
   /** HASH: 전략별 페이퍼 포지션 */
@@ -42,8 +45,10 @@ export const K = {
   paperDayStart: (strategy: string, date: string) => `mkt:paper:${strategy}:daystart:${date}`,
   /** STRING(TTL): 킬 스위치 발동 마커. 존재하면 당일 신규 진입 금지 */
   paperKill: (strategy: string, date: string) => `mkt:paper:${strategy}:kill:${date}`,
-  /** STRING(TTL): 워커 하트비트 */
+  /** STRING(TTL): 워커 하트비트 (프로세스 생존) */
   heartbeat: (name: string) => `mkt:heartbeat:${name}`,
+  /** STRING(TTL): 컨슈머 진행률 — 마지막 메시지 처리 시각. 생존과 별개로 "일하고 있는가" */
+  progress: (name: string) => `mkt:progress:${name}`,
   /** STRING(TTL): 주문 발행 후 체결 반영 전 중복 주문 방지 */
   paperPending: (strategy: string, symbol: string) => `mkt:paper:${strategy}:pending:${symbol}`,
 

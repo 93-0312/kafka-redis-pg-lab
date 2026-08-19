@@ -1,16 +1,19 @@
 'use client';
 
 import { hhmm } from '@/lib/format';
-import type { Currency, MinuteCandle } from '@/lib/types';
+import type { Currency, FocusIndicators, MinuteCandle } from '@/lib/types';
 
 interface Props {
   data: ({ t: string } & MinuteCandle)[];
   currency: Currency;
   prevClose: number;
+  indicators?: FocusIndicators | null;
 }
 
 const UP = '#ef5350';
 const DOWN = '#5b8def';
+const MA_COLOR = '#f0c778';
+const BB_COLOR = '#b48def';
 
 const fmt = (v: number, currency: Currency): string =>
   currency === 'KRW'
@@ -21,7 +24,7 @@ const fmt = (v: number, currency: Currency): string =>
  * 의존성 없는 SVG 캔들 차트.
  * quote 워커가 틱 스트림에서 롤업한 1분봉(mkt:candle:*)을 그대로 그립니다.
  */
-export function PriceChart({ data, currency, prevClose }: Props) {
+export function PriceChart({ data, currency, prevClose, indicators }: Props) {
   if (data.length === 0) {
     return <div className="empty">아직 캔들이 없습니다. producer 와 quote 워커를 실행해 주세요.</div>;
   }
@@ -39,6 +42,20 @@ export function PriceChart({ data, currency, prevClose }: Props) {
     min = Math.min(min, prevClose);
     max = Math.max(max, prevClose);
   }
+
+  // 지표선(MA20·볼린저)은 장중 가격대에서 크게 벗어나면 그리지 않습니다 —
+  // 멀리 있는 선 하나 때문에 캔들이 납작해지는 것을 막기 위해서입니다.
+  const nearRange = (v: number | null | undefined): v is number =>
+    v != null && v >= min - (max - min) * 0.5 && v <= max + (max - min) * 0.5 && v > 0;
+  const levels: { value: number; label: string; color: string }[] = [];
+  if (nearRange(indicators?.ma20)) levels.push({ value: indicators!.ma20!, label: 'MA20', color: MA_COLOR });
+  if (nearRange(indicators?.bbUpper)) levels.push({ value: indicators!.bbUpper!, label: 'BB상단', color: BB_COLOR });
+  if (nearRange(indicators?.bbLower)) levels.push({ value: indicators!.bbLower!, label: 'BB하단', color: BB_COLOR });
+  for (const lv of levels) {
+    min = Math.min(min, lv.value);
+    max = Math.max(max, lv.value);
+  }
+
   const span = max - min || max * 0.001 || 1;
   const y = (v: number) => PAD_T + innerH - ((v - min) / span) * innerH;
 
@@ -68,6 +85,18 @@ export function PriceChart({ data, currency, prevClose }: Props) {
           opacity={0.7}
         />
       )}
+
+      {levels.map((lv) => (
+        <g key={lv.label}>
+          <line
+            x1={0} x2={W} y1={y(lv.value)} y2={y(lv.value)}
+            stroke={lv.color} strokeWidth={1} strokeDasharray="6 3" opacity={0.75}
+          />
+          <text x={W - 4} y={y(lv.value) - 4} fill={lv.color} fontSize={9.5} textAnchor="end">
+            {lv.label} {fmt(lv.value, currency)}
+          </text>
+        </g>
+      ))}
 
       {data.map((d, i) => {
         const up = d.c >= d.o;

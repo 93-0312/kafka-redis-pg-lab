@@ -3,10 +3,10 @@ import { config } from '../config.js';
 import { AsOfIndicatorStore, type DailyCandle } from '../domain/indicators.js';
 import { changeRate, dateKey } from '../domain/quotes.js';
 import { CtxTracker, STRATEGIES, decide, isStale, positionSize } from '../domain/strategy.js';
-import { createConsumer, createProducer, onShutdown } from '../lib/kafka.js';
+import { createProducer, onShutdown, runResilientConsumer } from '../lib/kafka.js';
 import { K } from '../lib/keys.js';
 import { createRedis } from '../lib/redis.js';
-import { startHeartbeat } from '../lib/heartbeat.js';
+import { markProgress, startHeartbeat } from '../lib/heartbeat.js';
 import { sendSlackMessage } from '../lib/slack.js';
 import { fetchDailyCandles, fetchExchangeRate, fetchStockWarnings, toDailyCandle } from '../lib/toss.js';
 import type { PaperOrderEvent, PaperPosition, TickEvent } from '../types.js';
@@ -52,7 +52,10 @@ async function refreshFx(redis: ReturnType<typeof createRedis>): Promise<void> {
  */
 let indicatorStore = new AsOfIndicatorStore(new Map(), dateKey);
 
-async function refreshIndicators(symbols: string[]): Promise<void> {
+async function refreshIndicators(
+  symbols: string[],
+  redis: ReturnType<typeof createRedis>,
+): Promise<void> {
   const bySymbol = new Map<string, DailyCandle[]>();
   for (const symbol of symbols) {
     try {
@@ -63,10 +66,24 @@ async function refreshIndicators(symbols: string[]): Promise<void> {
       console.warn(`[strategy] ${symbol} 일봉 조회 실패:`, (err as Error).message);
     }
   }
-  if (bySymbol.size > 0) {
-    indicatorStore = new AsOfIndicatorStore(bySymbol, dateKey);
-    console.log(`[strategy] 지표 부트스트랩 완료: ${bySymbol.size}종목 × 일봉 80개 (MA/볼린저/RSI/ATR)`);
+  if (bySymbol.size === 0) return;
+  indicatorStore = new AsOfIndicatorStore(bySymbol, dateKey);
+
+  // 대시보드 표시용으로 오늘 기준 as-of 지표를 Redis 에 게시합니다.
+  const today = dateKey();
+  for (const symbol of bySymbol.keys()) {
+    const ind = indicatorStore.get(symbol, today);
+    await redis.hset(K.indicators(symbol), {
+      ma20: ind.ma20 !== null ? String(ind.ma20) : '',
+      ma60: ind.ma60 !== null ? String(ind.ma60) : '',
+      rsi14: ind.rsi14 !== null ? String(ind.rsi14) : '',
+      bbUpper: ind.bbUpper !== null ? String(ind.bbUpper) : '',
+      bbLower: ind.bbLower !== null ? String(ind.bbLower) : '',
+      atrPct: ind.atrPct !== null ? String(ind.atrPct) : '',
+      updatedAt: new Date().toISOString(),
+    });
   }
+  console.log(`[strategy] 지표 부트스트랩 완료: ${bySymbol.size}종목 × 일봉 80개 (MA/볼린저/RSI/ATR)`);
 }
 
 /**
@@ -171,16 +188,14 @@ async function main(): Promise<void> {
   const redis = createRedis('strategy');
   startHeartbeat(redis, 'strategy');
   await refreshFx(redis);
-  await refreshIndicators(config.toss.symbols);
+  await refreshIndicators(config.toss.symbols, redis);
   const fxTimer = setInterval(() => {
     void refreshFx(redis);
-    void refreshIndicators(config.toss.symbols);
+    void refreshIndicators(config.toss.symbols, redis);
   }, 30 * 60 * 1000);
 
-  const consumer = await createConsumer('mktlab-strategy', config.kafka.groups.strategy);
   const producer = await createProducer('mktlab-strategy-out');
 
-  await consumer.subscribe({ topic: config.kafka.topic, fromBeginning: false });
   console.log(
     `[strategy] group=${config.kafka.groups.strategy} 구독 시작 · ` +
       `전략 ${STRATEGIES.length}개(${STRATEGIES.map((s) => s.id).join(',')}) 동시 운용 · ` +
@@ -189,12 +204,16 @@ async function main(): Promise<void> {
 
   onShutdown(async () => {
     clearInterval(fxTimer);
-    await consumer.disconnect();
     await producer.disconnect();
     redis.disconnect();
   });
 
-  await consumer.run({
+  await runResilientConsumer({
+    clientId: 'mktlab-strategy',
+    groupId: config.kafka.groups.strategy,
+    topic: config.kafka.topic,
+    fromBeginning: false,
+    onProgress: () => markProgress(redis, 'strategy'),
     eachMessage: async ({ message }) => {
       if (!message.value) return;
       const tick = JSON.parse(message.value.toString()) as TickEvent;

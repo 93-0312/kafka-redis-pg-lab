@@ -1,9 +1,9 @@
 import { config } from '../config.js';
 import { changeRate, dateKey, mergeCandle, minuteBucket } from '../domain/quotes.js';
-import { createConsumer, onShutdown } from '../lib/kafka.js';
+import { onShutdown, runResilientConsumer } from '../lib/kafka.js';
 import { K, PROCESSED_TTL_SEC } from '../lib/keys.js';
 import { createRedis } from '../lib/redis.js';
-import { startHeartbeat } from '../lib/heartbeat.js';
+import { markProgress, startHeartbeat } from '../lib/heartbeat.js';
 import type { MinuteCandle, TickEvent } from '../types.js';
 
 const CANDLE_TTL = 60 * 60 * 48;
@@ -18,20 +18,21 @@ const CANDLE_TTL = 60 * 60 * 48;
 async function main(): Promise<void> {
   const redis = createRedis('quote');
   startHeartbeat(redis, 'quote');
-  const consumer = await createConsumer('mktlab-quote', config.kafka.groups.quote);
-
-  await consumer.subscribe({ topic: config.kafka.topic, fromBeginning: true });
   console.log(`[quote] group=${config.kafka.groups.quote} 구독 시작`);
 
   onShutdown(async () => {
-    await consumer.disconnect();
     redis.disconnect();
   });
 
   let processed = 0;
   let skipped = 0;
 
-  await consumer.run({
+  await runResilientConsumer({
+    clientId: 'mktlab-quote',
+    groupId: config.kafka.groups.quote,
+    topic: config.kafka.topic,
+    fromBeginning: true,
+    onProgress: () => markProgress(redis, 'quote'),
     eachMessage: async ({ message, partition }) => {
       if (!message.value) return;
       const tick = JSON.parse(message.value.toString()) as TickEvent;

@@ -22,6 +22,15 @@ export interface MinuteCandle {
   n: number;
 }
 
+export interface FocusIndicators {
+  ma20: number | null;
+  ma60: number | null;
+  rsi14: number | null;
+  bbUpper: number | null;
+  bbLower: number | null;
+  atrPct: number | null;
+}
+
 export interface DashboardSummary {
   quotes: QuoteRow[];
   totals: {
@@ -32,6 +41,7 @@ export interface DashboardSummary {
   };
   focus: string | null;
   candles: ({ t: string } & MinuteCandle)[];
+  indicators: FocusIndicators | null;
   generatedAt: string;
 }
 
