@@ -319,6 +319,14 @@ test('isRegularSession: 미국 09:30~16:00 ET (서머타임 자동)', () => {
   assert.equal(isRegularSession('US', '2026-08-18T07:00:00+09:00'), false);
 });
 
+test('모든 전략이 정규장 전용이다 (시간외 진입 품질 문제는 전략 무관)', () => {
+  assert.ok(STRATEGIES.every((s) => s.regularSessionOnly === true));
+  // 시간외에는 어떤 전략도 진입하지 않음 (예: meanrevert, NXT 시간외 -2.1% 크로싱)
+  const mr = byId('meanrevert');
+  const offSession = tick({ tradedAt: '2026-08-18T17:00:00+09:00' });
+  assert.equal(decide(offSession, -0.021, null, { ...CTX, prevRate: -0.01 }, mr), null);
+});
+
 test('highbreak: 정규장 밖에서는 신고가 갱신에도 진입하지 않는다', () => {
   const def = byId('highbreak');
   const inSession = tick({ price: 74000, tradedAt: '2026-08-18T10:00:00+09:00' });

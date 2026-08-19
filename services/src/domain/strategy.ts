@@ -63,7 +63,8 @@ export const STRATEGIES: StrategyDef[] = [
   {
     id: 'meanrevert',
     label: '평균회귀',
-    description: '-2% 하향 돌파 + RSI<40 (과매도 확인) · 익절 +1.5% / 손절 -1.5%',
+    description: '-2% 하향 돌파 + RSI<40 (과매도 확인) · 익절 +1.5% / 손절 -1.5% · 정규장 한정',
+    regularSessionOnly: true,
     entry: (_t, rate, ctx) =>
       crossedDown(ctx.prevRate, rate, -0.02) && rsiBelow(ctx, 40)
         ? `급락 돌파 매수: ${pct(ctx.prevRate!)} → ${pct(rate)} (-2% 하향 돌파, RSI ${ctx.daily?.rsi14?.toFixed(0) ?? '?'})`
@@ -74,7 +75,8 @@ export const STRATEGIES: StrategyDef[] = [
   {
     id: 'momentum',
     label: '추세추종',
-    description: '+2% 상향 돌파 + 주가>MA20 (추세 확인) · 익절 +1.5% / 손절 -1.5%',
+    description: '+2% 상향 돌파 + 주가>MA20 (추세 확인) · 익절 +1.5% / 손절 -1.5% · 정규장 한정',
+    regularSessionOnly: true,
     entry: (t, rate, ctx) =>
       crossedUp(ctx.prevRate, rate, 0.02) && aboveMa20(ctx, t.price)
         ? `돌파 매수: ${pct(ctx.prevRate!)} → ${pct(rate)} (+2% 상향 돌파, MA20 위)`
@@ -85,7 +87,9 @@ export const STRATEGIES: StrategyDef[] = [
   {
     id: 'deepdip',
     label: '낙폭과대',
-    description: '-4% 하향 돌파 매수, 길게 홀드 · 익절 +3% / 손절 max(3%, 1.5×ATR) — 변동성이 크면 손절도 넓게',
+    description:
+      '-4% 하향 돌파 매수, 길게 홀드 · 익절 +3% / 손절 max(3%, 1.5×ATR) · 정규장 한정 (시간외 -4%는 대개 실체 있는 악재)',
+    regularSessionOnly: true,
     entry: (_t, rate, ctx) =>
       crossedDown(ctx.prevRate, rate, -0.04)
         ? `낙폭과대 돌파 매수: ${pct(ctx.prevRate!)} → ${pct(rate)} (-4% 하향 돌파)`
@@ -100,8 +104,9 @@ export const STRATEGIES: StrategyDef[] = [
     id: 'scalper',
     label: '단기모멘텀',
     description:
-      '1분 +0.3% 상향 돌파 "순간" 편승 · 익절 +1.5% / 손절 -1.5% ' +
-      '(구 ±0.5% 는 왕복 비용 ~0.27% 에 잠식되어 기대값 음수 — 비용의 5배 이상으로 재설계)',
+      '1분 +0.3% 상향 돌파 "순간" 편승 · 익절 +1.5% / 손절 -1.5% · 정규장 한정 ' +
+      '(시간외 얇은 호가에선 1분 급등이 쉽게 만들어짐)',
+    regularSessionOnly: true,
     entry: (_t, _rate, ctx) =>
       ctx.shortChange !== null &&
       crossedUp(ctx.prevShortChange, ctx.shortChange, 0.003) &&
