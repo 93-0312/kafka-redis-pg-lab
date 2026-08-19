@@ -8,7 +8,13 @@ import type { PriceAlert } from '../types.js';
  */
 
 const SEVERITY_EMOJI = { INFO: 'ℹ️', WARN: '⚠️', CRITICAL: '🚨' } as const;
-const TYPE_LABEL = { SURGE: '급등', PLUNGE: '급락', SPIKE: '단기 급변동' } as const;
+const TYPE_LABEL = {
+  SURGE: '급등',
+  PLUNGE: '급락',
+  SPIKE: '단기 급변동',
+  REBOUND: '반등',
+  PULLBACK: '상승 되돌림',
+} as const;
 
 const SEVERITY_RANK = { INFO: 0, WARN: 1, CRITICAL: 2 } as const;
 

@@ -142,7 +142,7 @@ export interface PaperSummary {
 
 export interface PriceAlert {
   alertId: string;
-  type: 'SURGE' | 'PLUNGE' | 'SPIKE';
+  type: 'SURGE' | 'PLUNGE' | 'SPIKE' | 'REBOUND' | 'PULLBACK';
   severity: 'INFO' | 'WARN' | 'CRITICAL';
   symbol: string;
   name: string;

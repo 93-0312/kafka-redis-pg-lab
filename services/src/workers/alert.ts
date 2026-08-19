@@ -1,6 +1,12 @@
 import { config } from '../config.js';
-import { buildSpikeAlert, buildThresholdAlert, changeLevel, isSpike } from '../domain/alerts.js';
-import { changeRate } from '../domain/quotes.js';
+import {
+  buildReversalAlert,
+  buildSpikeAlert,
+  buildThresholdAlert,
+  changeLevel,
+  isSpike,
+} from '../domain/alerts.js';
+import { changeRate, dateKey } from '../domain/quotes.js';
 import { isStale } from '../domain/strategy.js';
 import { onShutdown, runResilientConsumer } from '../lib/kafka.js';
 import { ALERT_LIST_MAX, K } from '../lib/keys.js';
@@ -61,19 +67,50 @@ async function main(): Promise<void> {
       // 체결 시각이 오래된 틱은 알림 평가에서 제외해 "종가 기준 반복 알림"을 막습니다.
       if (isStale(tick.tradedAt, Date.now(), config.alerts.staleTickSec)) return;
 
-      // --- SURGE / PLUNGE: 등락률 계단 도달 ---
+      // --- SURGE / PLUNGE / REBOUND / PULLBACK: 등락률 계단 + 방향성 ---
       if (tick.prevClose) {
         const rate = changeRate(tick.price, tick.prevClose);
+        const stateKey = K.alertState(tick.symbol, dateKey(tick.polledAt));
+        const st = await redis.hgetall(stateKey);
+        const minRate = Math.min(Number(st['minRate'] ?? rate), rate);
+        const maxRate = Math.max(Number(st['maxRate'] ?? rate), rate);
+
+        // 급락/급등 알림은 "당일 최심 레벨을 새로 갱신할 때만" 냅니다.
+        // -7% 를 이미 알렸다면 반등 중인 -6% 를 다시 '급락 도달'로 알리지 않습니다.
         const level = changeLevel(rate, config.alerts.changeRateStep);
         if (level >= 1) {
-          const direction = rate >= 0 ? 'up' : 'down';
-          // 종목+방향+계단 별로 쿨다운. NX 성공 = 이번 계단은 처음 알림.
-          const mark = K.alertMark(tick.symbol, `${direction}:L${level}`);
-          const fresh = await redis.set(mark, '1', 'EX', config.alerts.cooldownSec, 'NX');
-          if (fresh === 'OK') {
+          const field = rate >= 0 ? 'upLevel' : 'downLevel';
+          const deepest = Number(st[field] ?? 0);
+          if (level > deepest) {
+            await redis.hset(stateKey, field, String(level));
             await publish(redis, buildThresholdAlert(tick, rate, level));
           }
         }
+
+        // 반등: 유의미한 급락(-2% 이하) 후 저점 대비 +N%p 회복.
+        // 다음 반등 알림은 추가로 +N%p 더 회복했을 때만 (도배 방지).
+        const step = config.alerts.reboundPct / 100;
+        if (minRate <= -0.02 && rate - minRate >= step) {
+          const lastAt = st['reboundAt'] !== undefined ? Number(st['reboundAt']) : null;
+          if (lastAt === null || rate >= lastAt + step) {
+            await redis.hset(stateKey, 'reboundAt', String(rate));
+            await publish(redis, buildReversalAlert(tick, 'REBOUND', minRate, rate));
+          }
+        }
+        // 상승 되돌림: +2% 이상 급등 후 고점 대비 -N%p 반납
+        if (maxRate >= 0.02 && maxRate - rate >= step) {
+          const lastAt = st['pullbackAt'] !== undefined ? Number(st['pullbackAt']) : null;
+          if (lastAt === null || rate <= lastAt - step) {
+            await redis.hset(stateKey, 'pullbackAt', String(rate));
+            await publish(redis, buildReversalAlert(tick, 'PULLBACK', maxRate, rate));
+          }
+        }
+
+        await redis
+          .multi()
+          .hset(stateKey, { minRate: String(minRate), maxRate: String(maxRate) })
+          .expire(stateKey, 60 * 60 * 48)
+          .exec();
       }
 
       // --- SPIKE: 단시간 급변 ---

@@ -114,7 +114,7 @@ export interface PaperTradeRecord {
   filledAt: string;
 }
 
-export type AlertType = 'SURGE' | 'PLUNGE' | 'SPIKE';
+export type AlertType = 'SURGE' | 'PLUNGE' | 'SPIKE' | 'REBOUND' | 'PULLBACK';
 export type AlertSeverity = 'INFO' | 'WARN' | 'CRITICAL';
 
 export interface PriceAlert {

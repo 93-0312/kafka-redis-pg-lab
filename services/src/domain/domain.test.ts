@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { buildSpikeAlert, buildThresholdAlert, changeLevel, isSpike, levelSeverity } from './alerts.js';
+import {
+  buildReversalAlert,
+  buildSpikeAlert,
+  buildThresholdAlert,
+  changeLevel,
+  isSpike,
+  levelSeverity,
+} from './alerts.js';
 import { AsOfIndicatorStore, computeDailyIndicators, type DailyCandle } from './indicators.js';
 import { changeRate, mergeCandle, minuteBucket, pickPrevClose } from './quotes.js';
 import { STRATEGIES, decide, isStale, positionSize, type MarketCtx } from './strategy.js';
@@ -93,6 +100,22 @@ test('isSpike: 윈도우 내 변동률 임계 판정', () => {
   assert.equal(isSpike(100.6, 100, 0.5), true);
   assert.equal(isSpike(100.4, 100, 0.5), false);
   assert.equal(isSpike(99.4, 100, 0.5), true);
+});
+
+test('buildReversalAlert: 반등은 저점→현재를 담는다', () => {
+  const a = buildReversalAlert(tick(), 'REBOUND', -0.072, -0.061);
+  assert.equal(a.type, 'REBOUND');
+  assert.equal(a.severity, 'WARN'); // 저점 -7.2% 는 깊은 급락 → 주목
+  assert.match(a.message, /저점 -7\.20% → 현재 -6\.10% \(\+1\.1%p 회복\)/);
+
+  const b = buildReversalAlert(tick(), 'REBOUND', -0.03, -0.019);
+  assert.equal(b.severity, 'INFO'); // 얕은 급락에서의 반등은 정보성
+});
+
+test('buildReversalAlert: 되돌림은 고점→현재를 담는다', () => {
+  const a = buildReversalAlert(tick(), 'PULLBACK', 0.042, 0.028);
+  assert.equal(a.type, 'PULLBACK');
+  assert.match(a.message, /고점 \+4\.20% → 현재 \+2\.80% \(-1\.4%p 반납\)/);
 });
 
 test('buildSpikeAlert: 급변 방향과 폭이 메시지에 담긴다', () => {

@@ -7,6 +7,8 @@ const TYPE_LABEL: Record<PriceAlert['type'], string> = {
   SURGE: '급등',
   PLUNGE: '급락',
   SPIKE: '단기 급변동',
+  REBOUND: '반등',
+  PULLBACK: '상승 되돌림',
 };
 
 export function AlertFeed({ alerts }: { alerts: PriceAlert[] }) {

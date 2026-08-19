@@ -113,5 +113,7 @@ export const config = {
     cooldownSec: num(process.env.ALERT_COOLDOWN_SEC, 300),
     /** 이보다 오래된 체결 시각의 틱은 알림 평가 제외 (장 마감 후 종가 반복 알림 방지) */
     staleTickSec: num(process.env.ALERT_STALE_TICK_SEC, 600),
+    /** 반등/되돌림 알림 기준: 당일 극값 대비 이 %p 이상 움직이면 발송 */
+    reboundPct: num(process.env.ALERT_REBOUND_PCT, 1),
   },
 } as const;

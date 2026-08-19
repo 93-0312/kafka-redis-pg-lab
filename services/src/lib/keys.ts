@@ -16,6 +16,12 @@ export const K = {
   spikeBase: (symbol: string) => `mkt:spike:${symbol}`,
   /** STRING(TTL): 알림 쿨다운 마커. SET NX 성공 = 이번이 첫 알림 */
   alertMark: (symbol: string, rule: string) => `mkt:alertmark:${symbol}:${rule}`,
+  /**
+   * HASH(TTL): 종목×일자별 알림 상태.
+   * minRate/maxRate(당일 극값), upLevel/downLevel(알림한 최심 레벨),
+   * reboundAt/pullbackAt(마지막 반등/되돌림 알림 시점의 등락률)
+   */
+  alertState: (symbol: string, date: string) => `mkt:alertstate:${symbol}:${date}`,
 
   /** Pub/Sub 채널: 실시간 알림 (놓쳐도 되는 것) */
   alertChannel: 'mkt:alerts',

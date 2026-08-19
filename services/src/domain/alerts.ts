@@ -64,3 +64,35 @@ export function isSpike(price: number, basePrice: number, spikeRatePct: number):
   if (basePrice <= 0) return false;
   return Math.abs((price - basePrice) / basePrice) * 100 >= spikeRatePct;
 }
+
+/**
+ * 반등/되돌림 알림.
+ * "급락 -6% 도달" 처럼 레벨만 말하면 -7% 에서 회복 중인 상황과 구분이 안 됩니다.
+ * 당일 극값(저점/고점)을 함께 담아 방향을 명확히 합니다.
+ */
+export function buildReversalAlert(
+  tick: TickEvent,
+  type: 'REBOUND' | 'PULLBACK',
+  extremeRate: number,
+  currentRate: number,
+): PriceAlert {
+  const moved = Math.abs(currentRate - extremeRate) * 100;
+  const message =
+    type === 'REBOUND'
+      ? `${tick.name} 반등: 당일 저점 ${pctText(extremeRate)} → 현재 ${pctText(currentRate)} (+${moved.toFixed(1)}%p 회복)`
+      : `${tick.name} 상승 되돌림: 당일 고점 ${pctText(extremeRate)} → 현재 ${pctText(currentRate)} (-${moved.toFixed(1)}%p 반납)`;
+  return {
+    alertId: randomUUID(),
+    type,
+    // 깊은 급락(-5% 이상)에서의 반등은 주목할 이벤트, 그 외에는 정보성
+    severity: Math.abs(extremeRate) >= 0.05 ? 'WARN' : 'INFO',
+    symbol: tick.symbol,
+    name: tick.name,
+    market: tick.market,
+    price: tick.price,
+    currency: tick.currency,
+    changeRate: currentRate,
+    message,
+    detectedAt: new Date().toISOString(),
+  };
+}
