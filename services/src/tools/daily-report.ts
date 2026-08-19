@@ -1,4 +1,5 @@
 import { readPaper } from '../api/paper.js';
+import { config } from '../config.js';
 import { createPool } from '../lib/pg.js';
 import { createRedis } from '../lib/redis.js';
 import { sendSlackMessage } from '../lib/slack.js';
@@ -115,11 +116,16 @@ async function main(): Promise<void> {
   const body = healthLine + lines.join('\n');
   const footer = `24h 총 체결 ${totalFills24h}건 · 전략별 시작 자금 1억 · ⚠️ 학습용 시뮬레이션 (실주문 없음)`;
 
-  const ok = await sendSlackMessage(`${title}\n${body}`, [
-    { type: 'header', text: { type: 'plain_text', text: title } },
-    { type: 'section', text: { type: 'mrkdwn', text: body } },
-    { type: 'context', elements: [{ type: 'mrkdwn', text: footer }] },
-  ]);
+  // 페이퍼 성적 요약이므로 페이퍼 전용 채널로 (미설정 시 기본 채널)
+  const ok = await sendSlackMessage(
+    `${title}\n${body}`,
+    [
+      { type: 'header', text: { type: 'plain_text', text: title } },
+      { type: 'section', text: { type: 'mrkdwn', text: body } },
+      { type: 'context', elements: [{ type: 'mrkdwn', text: footer }] },
+    ],
+    config.slack.paperWebhookUrl,
+  );
 
   console.log(ok ? '브리핑 발송 완료' : '브리핑 발송 실패 (스냅샷은 기록됨)');
   redis.disconnect();
