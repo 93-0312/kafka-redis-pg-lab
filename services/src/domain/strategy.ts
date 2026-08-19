@@ -39,6 +39,13 @@ export interface StrategyDef {
   entry: (tick: TickEvent, changeRate: number, ctx: MarketCtx) => string | null;
   takeProfitPct: number;
   stopLossPct: number;
+  /**
+   * 트레일링 익절 폭(%). 지정하면 익절선에 닿아도 즉시 팔지 않고 고점을 따라갑니다.
+   * 청산선 = max(익절선, 고점×(1-trailPct)) — 익절선 아래로는 내려가지 않으므로
+   * 고정 익절보다 나쁠 수 없고, 추세가 이어지면 더 먹습니다.
+   * (승률이 낮은 돌파 전략은 "이긴 거래를 크게" 만들어야 기대값이 서기 때문에 넣었습니다)
+   */
+  trailPct?: number;
   /** 동적 손절 폭(%). 지정 시 stopLossPct 대신 사용 (예: ATR 기반) */
   dynamicStopPct?: (ctx: MarketCtx) => number;
   /** true 면 정규장(KRX 09:00~15:30 / US 09:30~16:00 ET)에서만 신규 진입. 청산은 항상 허용 */
@@ -53,6 +60,12 @@ const aboveMa20 = (ctx: MarketCtx, price: number): boolean =>
 
 const pct = (r: number): string => `${r >= 0 ? '+' : ''}${(r * 100).toFixed(2)}%`;
 
+/**
+ * 신고가 돌파로 인정할 최소 폭(0.1%). 호가 한 틱 차이로 고가를 "스치는" 것까지
+ * 돌파로 세면 하루에도 수십 번 진입해 수수료만 나갑니다 (실측 승률 13%).
+ */
+const HIGH_BREAK_MARGIN = 0.001;
+
 /** 등락률이 임계값을 "이번 틱에 새로" 하향/상향 돌파했는지 (크로싱) */
 const crossedDown = (prev: number | null, cur: number, threshold: number): boolean =>
   prev !== null && prev > threshold && cur <= threshold;
@@ -63,7 +76,7 @@ export const STRATEGIES: StrategyDef[] = [
   {
     id: 'meanrevert',
     label: '평균회귀',
-    description: '-2% 하향 돌파 + RSI<40 (과매도 확인) · 익절 +1.5% / 손절 -1.5% · 정규장 한정',
+    description: '-2% 하향 돌파 + RSI<40 (과매도 확인) · 익절 +1.5%부터 트레일링(-0.8%) / 손절 -1.5% · 정규장 한정',
     regularSessionOnly: true,
     entry: (_t, rate, ctx) =>
       crossedDown(ctx.prevRate, rate, -0.02) && rsiBelow(ctx, 40)
@@ -71,11 +84,12 @@ export const STRATEGIES: StrategyDef[] = [
         : null,
     takeProfitPct: 1.5,
     stopLossPct: 1.5,
+    trailPct: 0.8,
   },
   {
     id: 'momentum',
     label: '추세추종',
-    description: '+2% 상향 돌파 + 주가>MA20 (추세 확인) · 익절 +1.5% / 손절 -1.5% · 정규장 한정',
+    description: '+2% 상향 돌파 + 주가>MA20 (추세 확인) · 익절 +1.5%부터 트레일링(-0.8%) / 손절 -1.5% · 정규장 한정',
     regularSessionOnly: true,
     entry: (t, rate, ctx) =>
       crossedUp(ctx.prevRate, rate, 0.02) && aboveMa20(ctx, t.price)
@@ -83,12 +97,14 @@ export const STRATEGIES: StrategyDef[] = [
         : null,
     takeProfitPct: 1.5,
     stopLossPct: 1.5,
+    trailPct: 0.8,
   },
   {
     id: 'deepdip',
     label: '낙폭과대',
     description:
-      '-4% 하향 돌파 매수, 길게 홀드 · 익절 +3% / 손절 max(3%, 1.5×ATR) · 정규장 한정 (시간외 -4%는 대개 실체 있는 악재)',
+      '-4% 하향 돌파 매수, 길게 홀드 · 익절 +3%부터 트레일링(-1.5%) / 손절 max(3%, 1.5×ATR) · ' +
+      '정규장 한정 (시간외 -4%는 대개 실체 있는 악재)',
     regularSessionOnly: true,
     entry: (_t, rate, ctx) =>
       crossedDown(ctx.prevRate, rate, -0.04)
@@ -96,6 +112,7 @@ export const STRATEGIES: StrategyDef[] = [
         : null,
     takeProfitPct: 3,
     stopLossPct: 3,
+    trailPct: 1.5,
     // -4% 빠진 종목의 일중 변동성이면 고정 -3% 는 노이즈에 터집니다. ATR 로 여유를 줍니다.
     dynamicStopPct: (ctx) =>
       ctx.daily?.atrPct != null ? Math.max(3, ctx.daily.atrPct * 1.5) : 3,
@@ -104,30 +121,39 @@ export const STRATEGIES: StrategyDef[] = [
     id: 'scalper',
     label: '단기모멘텀',
     description:
-      '1분 +0.3% 상향 돌파 "순간" 편승 · 익절 +1.5% / 손절 -1.5% · 정규장 한정 ' +
-      '(시간외 얇은 호가에선 1분 급등이 쉽게 만들어짐)',
+      '1분 +0.3% 상향 돌파 "순간" 편승 (당일 상승 + MA20 위 + RSI<70 인 종목만) · ' +
+      '익절 +1.5%부터 트레일링(-0.8%) / 손절 -1.5% · 정규장 한정',
     regularSessionOnly: true,
-    entry: (_t, _rate, ctx) =>
+    entry: (t, rate, ctx) =>
       ctx.shortChange !== null &&
       crossedUp(ctx.prevShortChange, ctx.shortChange, 0.003) &&
-      rsiBelow(ctx, 70) // 이미 과열(RSI≥70)인 종목의 고점 추격은 걸러냅니다
-        ? `급등 편승: 1분 내 ${pct(ctx.shortChange)} (+0.3% 상향 돌파)`
+      rsiBelow(ctx, 70) && // 이미 과열(RSI≥70)인 종목의 고점 추격은 걸러냅니다
+      aboveMa20(ctx, t.price) && // 하락 추세 종목의 1분 반등은 대부분 되밀립니다
+      rate > 0 // 당일 하락 중인 종목의 1분 급등은 되돌림일 뿐입니다
+        ? `급등 편승: 1분 내 ${pct(ctx.shortChange)} (+0.3% 상향 돌파, MA20 위)`
         : null,
     takeProfitPct: 1.5,
     stopLossPct: 1.5,
+    trailPct: 0.8,
   },
   {
     id: 'highbreak',
     label: '신고가돌파',
     description:
-      '당일 고가 갱신 + 상승 중일 때 매수 (정규장 한정 — 시간외 얇은 유동성의 가짜 돌파 배제) · 익절 +2% / 손절 -1%',
+      '당일 고가 +0.1% 이상 돌파 + 상승 중 + 주가>MA20 (정규장 한정) · ' +
+      '익절 +2%부터 트레일링(-1%) / 손절 -1%',
     regularSessionOnly: true,
     entry: (t, rate, ctx) =>
-      ctx.dayHigh !== null && t.price > ctx.dayHigh && rate > 0
-        ? `신고가 돌파: 당일 고가 ${ctx.dayHigh.toLocaleString('ko-KR')} 갱신 (${pct(rate)})`
+      ctx.dayHigh !== null &&
+      t.price >= ctx.dayHigh * (1 + HIGH_BREAK_MARGIN) &&
+      rate > 0 &&
+      aboveMa20(ctx, t.price)
+        ? `신고가 돌파: 당일 고가 ${ctx.dayHigh.toLocaleString('ko-KR')} 대비 ` +
+          `${pct((t.price - ctx.dayHigh) / ctx.dayHigh)} 갱신 (${pct(rate)}, MA20 위)`
         : null,
     takeProfitPct: 2,
     stopLossPct: 1,
+    trailPct: 1,
   },
 ];
 
@@ -136,6 +162,16 @@ export const STRATEGY_IDS = STRATEGIES.map((s) => s.id);
 export interface Decision {
   side: 'BUY' | 'SELL';
   reason: string;
+}
+
+/**
+ * 보유 중 최고가를 갱신해 돌려줍니다 (트레일링 익절의 기준점).
+ * 라이브 워커와 백테스트 엔진이 같은 구현을 쓰도록 여기 둡니다.
+ */
+export function trackPeak(position: PaperPosition, price: number): number {
+  const peak = Math.max(position.peakPrice ?? position.avgPrice, price);
+  position.peakPrice = peak;
+  return peak;
 }
 
 /** 포지션이 있으면 청산(익절/손절)만, 없으면 진입만 검토합니다. */
@@ -149,11 +185,32 @@ export function decide(
   if (position) {
     const fromAvg = (tick.price - position.avgPrice) / position.avgPrice;
     const stopPct = def.dynamicStopPct?.(ctx) ?? def.stopLossPct;
-    if (fromAvg >= def.takeProfitPct / 100) {
-      return { side: 'SELL', reason: `익절: 평단 대비 ${pct(fromAvg)} ≥ +${def.takeProfitPct}%` };
-    }
+    const tpLine = position.avgPrice * (1 + def.takeProfitPct / 100);
+    const peak = Math.max(position.peakPrice ?? tick.price, tick.price);
+
+    // 손절이 최우선입니다. 트레일링이 발동된 뒤 갭으로 손절선까지 밀린 경우에도
+    // "트레일링 익절"이 아니라 손절로 기록되어야 성적 해석이 흐려지지 않습니다.
     if (fromAvg <= -stopPct / 100) {
       return { side: 'SELL', reason: `손절: 평단 대비 ${pct(fromAvg)} ≤ -${stopPct.toFixed(1)}%` };
+    }
+
+    // 트레일링 익절: 보유 중 고점이 한 번이라도 익절선을 넘었다면(=발동) 그 뒤로는
+    // 고점을 따라가다가 trailPct 되밀릴 때 청산합니다. 청산선은 익절선 아래로
+    // 내려가지 않으므로 고정 익절보다 나쁠 수 없고, 추세가 이어지면 더 먹습니다.
+    if (def.trailPct != null && peak >= tpLine) {
+      const exitLine = Math.max(tpLine, peak * (1 - def.trailPct / 100));
+      if (tick.price <= exitLine) {
+        return {
+          side: 'SELL',
+          reason:
+            `트레일링 익절: 고점 ${Math.round(peak).toLocaleString('ko-KR')} 대비 ` +
+            `${pct((tick.price - peak) / peak)} 되밀림 (평단 대비 ${pct(fromAvg)})`,
+        };
+      }
+      return null; // 아직 고점 경신 중 — 홀드
+    }
+    if (def.trailPct == null && fromAvg >= def.takeProfitPct / 100) {
+      return { side: 'SELL', reason: `익절: 평단 대비 ${pct(fromAvg)} ≥ +${def.takeProfitPct}%` };
     }
     return null;
   }

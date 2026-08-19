@@ -16,6 +16,7 @@ import {
   isRegularSession,
   isStale,
   positionSize,
+  trackPeak,
   type MarketCtx,
 } from './strategy.js';
 import type { PaperPosition, TickEvent } from '../types.js';
@@ -140,9 +141,9 @@ const byId = (id: string) => {
   assert.ok(def, `전략 없음: ${id}`);
   return def;
 };
-const position = (avgPrice: number): PaperPosition => ({
+const position = (avgPrice: number, peakPrice?: number): PaperPosition => ({
   symbol: '005930', name: '삼성전자', market: 'KR', currency: 'KRW',
-  quantity: 10, avgPrice, openedAt: '2026-08-18T10:00:00+09:00',
+  quantity: 10, avgPrice, openedAt: '2026-08-18T10:00:00+09:00', peakPrice,
 });
 
 test('전략 5개가 등록되어 있다', () => {
@@ -178,19 +179,24 @@ test('deepdip: -4% 하향 돌파 순간에만 매수', () => {
   assert.equal(decide(tick(), -0.03, null, { ...CTX, prevRate: -0.01 }, def), null);
 });
 
-test('scalper: 1분 변화율이 +0.3% 를 상향 돌파하는 순간에만 매수', () => {
+test('scalper: 1분 변화율이 +0.3% 를 상향 돌파하는 순간에만 매수 (당일 상승 종목 한정)', () => {
   const def = byId('scalper');
   assert.equal(
-    decide(tick(), 0, null, { ...CTX, shortChange: 0.004, prevShortChange: 0.002 }, def)?.side,
+    decide(tick(), 0.01, null, { ...CTX, shortChange: 0.004, prevShortChange: 0.002 }, def)?.side,
     'BUY',
   );
   // 이미 +0.3% 위에 있던 상태 → 관망
   assert.equal(
-    decide(tick(), 0, null, { ...CTX, shortChange: 0.004, prevShortChange: 0.0035 }, def),
+    decide(tick(), 0.01, null, { ...CTX, shortChange: 0.004, prevShortChange: 0.0035 }, def),
     null,
   );
-  assert.equal(decide(tick(), 0, null, { ...CTX, shortChange: 0.002, prevShortChange: 0 }, def), null);
-  assert.equal(decide(tick(), 0, null, CTX, def), null); // 기준가 없으면 관망
+  // 당일 하락 중인 종목의 1분 급등은 되돌림 — 진입하지 않습니다
+  assert.equal(
+    decide(tick(), -0.01, null, { ...CTX, shortChange: 0.004, prevShortChange: 0.002 }, def),
+    null,
+  );
+  assert.equal(decide(tick(), 0.01, null, { ...CTX, shortChange: 0.002, prevShortChange: 0 }, def), null);
+  assert.equal(decide(tick(), 0.01, null, CTX, def), null); // 기준가 없으면 관망
 });
 
 test('highbreak: 당일 고가 갱신 + 상승 중일 때만 매수', () => {
@@ -203,9 +209,35 @@ test('highbreak: 당일 고가 갱신 + 상승 중일 때만 매수', () => {
 
 test('decide: 포지션이 있으면 익절/손절만 검토', () => {
   const def = byId('meanrevert');
-  assert.match(decide(tick({ price: 71100 }), 0, position(70000), CTX, def)?.reason ?? '', /익절/);
+  // 익절선(+1.5%) 통과 직후엔 팔지 않고 고점을 따라갑니다 (트레일링)
+  assert.equal(decide(tick({ price: 71100 }), 0, position(70000, 71100), CTX, def), null);
   assert.match(decide(tick({ price: 68900 }), 0, position(70000), CTX, def)?.reason ?? '', /손절/);
   assert.equal(decide(tick({ price: 70500 }), -0.05, position(70000), CTX, def), null);
+});
+
+test('트레일링 익절: 익절선 위에서 고점 대비 되밀리면 청산, 익절선 밑으로는 안 내려간다', () => {
+  const def = byId('meanrevert'); // 익절 +1.5% · 트레일 -0.8%
+  // 고점 73,000 → 청산선 = max(71,050(익절선), 72,416(고점-0.8%)) = 72,416
+  assert.equal(decide(tick({ price: 72_500 }), 0, position(70_000, 73_000), CTX, def), null);
+  assert.match(
+    decide(tick({ price: 72_400 }), 0, position(70_000, 73_000), CTX, def)?.reason ?? '',
+    /트레일링 익절/,
+  );
+  // 고점이 익절선 바로 위(71,100)면 청산선은 익절선(71,050) — 그 아래로는 절대 안 내려갑니다
+  assert.match(
+    decide(tick({ price: 71_040 }), 0, position(70_000, 71_100), CTX, def)?.reason ?? '',
+    /트레일링 익절/,
+  );
+  // 손절은 트레일링과 무관하게 그대로 동작
+  assert.match(decide(tick({ price: 68_900 }), 0, position(70_000, 71_100), CTX, def)?.reason ?? '', /손절/);
+});
+
+test('trackPeak: 보유 중 최고가만 올라가고 내려가지 않는다', () => {
+  const pos = position(70_000);
+  assert.equal(trackPeak(pos, 69_000), 70_000); // 평단 아래면 평단 유지
+  assert.equal(trackPeak(pos, 72_000), 72_000);
+  assert.equal(trackPeak(pos, 71_000), 72_000);
+  assert.equal(pos.peakPrice, 72_000);
 });
 
 // ── 지표 ───────────────────────────────────────────────
@@ -290,11 +322,23 @@ const emptyDaily = {
   ma20: null, ma60: null, rsi14: null, bbUpper: null, bbLower: null, atrPct: null, lastClose: null,
 };
 
-test('highbreak: 비대칭 청산 (+2% 익절 / -1% 손절)', () => {
+test('highbreak: 비대칭 청산 (+2% 익절선부터 트레일링 / -1% 손절)', () => {
   const def = byId('highbreak');
   assert.equal(decide(tick({ price: 71100 }), 0, position(70000), CTX, def), null); // +1.57% 아직 홀드
-  assert.match(decide(tick({ price: 71500 }), 0, position(70000), CTX, def)?.reason ?? '', /익절/);
+  // 익절선(+2% = 71,400) 통과 후엔 고점 대비 -1% 되밀릴 때까지 홀드
+  assert.equal(decide(tick({ price: 71500 }), 0, position(70000, 71500), CTX, def), null);
+  assert.match(
+    decide(tick({ price: 71_390 }), 0, position(70000, 71500), CTX, def)?.reason ?? '',
+    /트레일링 익절/,
+  );
   assert.match(decide(tick({ price: 69200 }), 0, position(70000), CTX, def)?.reason ?? '', /손절/);
+});
+
+test('highbreak: 고가를 "스치는" 돌파(마진 0.1% 미만)는 진입하지 않는다', () => {
+  const def = byId('highbreak');
+  const ctx = { ...CTX, dayHigh: 73_900 };
+  assert.equal(decide(tick({ price: 73_910 }), 0.01, null, ctx, def), null); // +0.01% — 노이즈
+  assert.equal(decide(tick({ price: 74_000 }), 0.01, null, ctx, def)?.side, 'BUY'); // +0.14%
 });
 
 test('positionSize: 현금 비중으로 정수 수량, 1주 미만이면 0', () => {
@@ -338,8 +382,8 @@ test('highbreak: 정규장 밖에서는 신고가 갱신에도 진입하지 않�
   assert.equal(decide(offSession, 0.01, null, ctx, def), null);
   // 청산(익절/손절)은 시간외에도 정상 동작해야 합니다
   assert.match(
-    decide(tick({ price: 71500, tradedAt: '2026-08-18T17:00:00+09:00' }), 0, position(70000), CTX, def)?.reason ?? '',
-    /익절/,
+    decide(tick({ price: 69_000, tradedAt: '2026-08-18T17:00:00+09:00' }), 0, position(70000), CTX, def)?.reason ?? '',
+    /손절/,
   );
 });
 

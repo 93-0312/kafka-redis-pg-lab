@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { config } from '../config.js';
 import { AsOfIndicatorStore, type DailyCandle } from '../domain/indicators.js';
 import { changeRate, dateKey } from '../domain/quotes.js';
-import { CtxTracker, STRATEGIES, decide, isStale, positionSize } from '../domain/strategy.js';
+import { CtxTracker, STRATEGIES, decide, isStale, positionSize, trackPeak } from '../domain/strategy.js';
 import { createProducer, onShutdown, runResilientConsumer } from '../lib/kafka.js';
 import { K } from '../lib/keys.js';
 import { createRedis } from '../lib/redis.js';
@@ -187,6 +187,7 @@ async function loadPosition(
     quantity: Number(raw['quantity'] ?? 0),
     avgPrice: Number(raw['avgPrice'] ?? 0),
     openedAt: raw['openedAt'] ?? '',
+    peakPrice: raw['peakPrice'] ? Number(raw['peakPrice']) : undefined,
   };
 }
 
@@ -239,6 +240,16 @@ async function main(): Promise<void> {
 
       for (const def of STRATEGIES) {
         const position = await loadPosition(redis, def.id, tick.symbol);
+
+        // 트레일링 익절 기준점: 보유 중 최고가를 갱신해 둡니다.
+        // (포지션 해시는 청산 시 통째로 삭제되므로 다음 진입에 남지 않습니다)
+        if (position) {
+          const prevPeak = position.peakPrice;
+          const peak = trackPeak(position, tick.price);
+          if (prevPeak === undefined || peak > prevPeak) {
+            await redis.hset(K.paperPos(def.id, tick.symbol), { peakPrice: String(peak) });
+          }
+        }
 
         // 시간 청산: 익절도 손절도 안 닿는 좀비 포지션을 강제 종료합니다.
         let decision = decide(tick, rate, position, ctx, def);

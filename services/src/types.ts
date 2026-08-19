@@ -85,6 +85,11 @@ export interface PaperPosition {
   quantity: number;
   avgPrice: number;
   openedAt: string;
+  /**
+   * 보유 중 기록한 최고가 (거래 통화 기준). 트레일링 익절의 기준점입니다.
+   * 구버전 포지션에는 없을 수 있어 optional — 없으면 현재가부터 추적을 시작합니다.
+   */
+  peakPrice?: number;
 }
 
 /** 체결(또는 거부) 기록. Redis List 에 쌓입니다. */

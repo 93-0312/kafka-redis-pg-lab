@@ -5,6 +5,7 @@ import {
   decide,
   isStale,
   positionSize,
+  trackPeak,
   type StrategyDef,
 } from '../domain/strategy.js';
 import type { Market, PaperPosition, TickEvent } from '../types.js';
@@ -166,6 +167,8 @@ export function runBacktest(
       }
 
       const position = acc.positions.get(tick.symbol) ?? null;
+      // 트레일링 익절 기준점 갱신 (라이브 워커와 동일)
+      if (position) trackPeak(position, tick.price);
 
       // 시간 청산 (라이브 워커와 동일)
       let decision = decide(tick, rate, position, ctx, def);
@@ -203,6 +206,7 @@ export function runBacktest(
           quantity,
           avgPrice: tick.price,
           openedAt: tick.polledAt,
+          peakPrice: tick.price,
           costKrw: gross + buyCost,
         });
         acc.cooldownUntil.set(tick.symbol, now + cfg.cooldownSec * 1000);

@@ -38,11 +38,13 @@ const tick = (sec: number, price: number, over: Partial<TickEvent> = {}): TickEv
 
 const meanrevert = STRATEGIES.filter((s) => s.id === 'meanrevert');
 
-test('engine: 급락 매수 → 반등 익절 사이클', () => {
+test('engine: 급락 매수 → 트레일링 익절 사이클', () => {
   const ticks = [
     tick(0, 100_000),  // 0% — 관망
     tick(3, 97_000),   // -3% — 진입
-    tick(6, 99_000),   // 평단 대비 +2.06% — 익절
+    tick(6, 99_000),   // 평단 대비 +2.06% — 익절선 통과, 트레일링 시작 (고점 99,000)
+    tick(9, 100_000),  // 고점 경신 — 계속 홀드 (고정 익절이면 여기서 이미 팔고 없음)
+    tick(12, 99_100),  // 고점 대비 -0.9% ≤ -0.8% → 트레일링 청산 (청산선 99,200)
   ];
   const [r] = runBacktest(ticks, meanrevert, CFG);
   assert.ok(r);
@@ -50,9 +52,10 @@ test('engine: 급락 매수 → 반등 익절 사이클', () => {
   assert.equal(r.sells, 1);
   assert.equal(r.wins, 1);
   assert.equal(r.winRate, 1);
-  // 10% 비중: 1000만 ÷ 97000 = 103주, 주당 +2000원 → +206,000원
-  assert.equal(r.realizedPnl, 103 * 2000);
-  assert.equal(r.finalEquity, CFG.initialCash + 103 * 2000);
+  assert.match(r.trades[1]!.reason, /트레일링/);
+  // 10% 비중: 1000만 ÷ 97000 = 103주, 주당 +2100원 (고정 익절 +2000원보다 크다)
+  assert.equal(r.realizedPnl, 103 * 2100);
+  assert.equal(r.finalEquity, CFG.initialCash + 103 * 2100);
   assert.equal(r.openPositions, 0);
 });
 
@@ -91,7 +94,8 @@ test('engine: 거래비용이 실현손익을 갉아먹는다', () => {
   const ticks = [
     tick(0, 100_000),
     tick(3, 97_000),   // 진입 103주
-    tick(6, 99_000),   // +2.06% 익절
+    tick(6, 99_000),   // +2.06% — 트레일링 시작
+    tick(9, 98_000),   // 고점 대비 -1.01% → 트레일링 청산
   ];
   const [free] = runBacktest(ticks, meanrevert, CFG);
   const [paid] = runBacktest(ticks, meanrevert, costCfg);
