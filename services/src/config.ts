@@ -69,6 +69,8 @@ export const config = {
     minSeverity: (process.env.SLACK_MIN_SEVERITY ?? 'WARN') as 'INFO' | 'WARN' | 'CRITICAL',
     /** 페이퍼 체결(매수/매도)도 슬랙으로 발송할지 */
     paperTrades: (process.env.SLACK_PAPER_TRADES ?? 'true') !== 'false',
+    /** 페이퍼 매매 전용 채널 웹훅. 비어 있으면 기본 웹훅(webhookUrl)으로 발송 */
+    paperWebhookUrl: process.env.SLACK_PAPER_WEBHOOK_URL ?? '',
   },
   paper: {
     /**

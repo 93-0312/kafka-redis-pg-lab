@@ -65,7 +65,9 @@ async function record(
     const action = trade.side === 'BUY' ? '매수' : '매도';
     const label = STRATEGY_LABEL.get(strategyId) ?? strategyId;
     await sendSlackMessage(
-      `${emoji} [페이퍼·${label}] ${action} ${trade.name} ${trade.quantity.toLocaleString('ko-KR')}주 @ ${priceText(trade.price, trade.currency)}${pnl}\n· ${trade.reason}`,
+      `${emoji} [${label}] ${action} ${trade.name} ${trade.quantity.toLocaleString('ko-KR')}주 @ ${priceText(trade.price, trade.currency)}${pnl}\n· ${trade.reason}`,
+      undefined,
+      config.slack.paperWebhookUrl, // 페이퍼 전용 채널 (미설정 시 기본 채널)
     );
   }
 }

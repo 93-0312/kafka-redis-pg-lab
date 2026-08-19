@@ -20,11 +20,19 @@ export function slackEnabled(alert: Pick<PriceAlert, 'market' | 'severity'>): bo
   );
 }
 
-/** 알림 규칙과 무관한 일반 메시지 발송 (아침 브리핑 등). 성공 여부를 돌려줍니다. */
-export async function sendSlackMessage(text: string, blocks?: unknown[]): Promise<boolean> {
-  if (!config.slack.webhookUrl) return false;
+/**
+ * 알림 규칙과 무관한 일반 메시지 발송 (아침 브리핑 등). 성공 여부를 돌려줍니다.
+ * webhookUrl 을 넘기면 해당 채널로, 없으면 기본 채널로 발송합니다.
+ */
+export async function sendSlackMessage(
+  text: string,
+  blocks?: unknown[],
+  webhookUrl?: string,
+): Promise<boolean> {
+  const url = webhookUrl || config.slack.webhookUrl;
+  if (!url) return false;
   try {
-    const res = await fetch(config.slack.webhookUrl, {
+    const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(blocks ? { text, blocks } : { text }),

@@ -162,7 +162,8 @@ async function killSwitchActive(
   if (first === 'OK') {
     const msg = `🛑 [킬 스위치] ${strategyId} 당일 손실 ${(loss * 100).toFixed(2)}% ≥ ${config.paper.dailyMaxLossPct}% — 오늘 신규 진입 중단 (청산은 계속)`;
     console.warn(`[strategy] ${msg}`);
-    await sendSlackMessage(msg);
+    // 페이퍼 관련 알림이므로 페이퍼 채널로 (미설정 시 기본 채널)
+    await sendSlackMessage(msg, undefined, config.slack.paperWebhookUrl);
   }
   return true;
 }
