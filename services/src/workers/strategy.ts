@@ -91,7 +91,11 @@ async function refreshIndicators(
  * 매수 유의 종목 필터.
  * VI(변동성완화장치) 발동 중이거나 정리매매/투자위험 지정 종목은 신규 진입을 막습니다.
  * 급등락 전략은 VI 에 자주 걸리는데, VI 중에는 2분 단일가 전환이라 즉시 체결 가정이 깨집니다.
- * 결과는 2분 캐싱해서 rate limit 을 아낍니다.
+ *
+ * 캐시는 10초만 둡니다 (동일 틱 폭주 시 중복 호출 방지용 최소 완충).
+ * VI 는 2분짜리 이벤트라 캐시가 길면 "VI 를 발동시킨 바로 그 급등"을 쫓아 들어가는
+ * 최악의 타이밍에 필터가 낡아 있게 됩니다. 크로싱+쿨다운 덕에 매수 시도가 희소해서
+ * 매번 신선하게 확인해도 rate limit 부담이 없습니다.
  */
 const BLOCKED_WARNINGS = new Set([
   'VI_STATIC', 'VI_DYNAMIC', 'VI_STATIC_AND_DYNAMIC',
@@ -113,7 +117,7 @@ async function isTradeBlocked(symbol: string): Promise<boolean> {
   } catch {
     // 조회 실패 시 차단하지 않습니다 (필터는 보조 장치, 파이프라인을 멈추지 않음)
   }
-  warningCache.set(symbol, { blocked, until: Date.now() + 120_000 });
+  warningCache.set(symbol, { blocked, until: Date.now() + 10_000 });
   return blocked;
 }
 
