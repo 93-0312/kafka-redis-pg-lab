@@ -31,8 +31,10 @@ async function loadTicks(from?: string, to?: string): Promise<TickEvent[]> {
   const pool = createPool();
   const where: string[] = [];
   const params: string[] = [];
-  if (from) { params.push(from); where.push(`polled_at >= $${params.length}`); }
-  if (to) { params.push(to); where.push(`polled_at < ($${params.length}::date + 1)`); }
+  // 날짜는 KST 기준으로 해석합니다. 오프셋 없이 넘기면 Postgres(UTC)가
+  // UTC 자정으로 받아서 KST 00~09시(미국 야간 세션)가 잘려나갑니다.
+  if (from) { params.push(`${from}T00:00:00+09:00`); where.push(`polled_at >= $${params.length}`); }
+  if (to) { params.push(`${to}T00:00:00+09:00`); where.push(`polled_at < ($${params.length}::timestamptz + interval '1 day')`); }
 
   const sql = `
     SELECT event_id, symbol, name, market, currency, price, prev_close, traded_at, polled_at
