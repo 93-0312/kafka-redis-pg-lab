@@ -5,6 +5,7 @@ import { createConsumer, onShutdown } from '../lib/kafka.js';
 import { K, PROCESSED_TTL_SEC } from '../lib/keys.js';
 import { createRedis } from '../lib/redis.js';
 import { startHeartbeat } from '../lib/heartbeat.js';
+import { sendSlackMessage } from '../lib/slack.js';
 import type { PaperOrderEvent, PaperTradeRecord } from '../types.js';
 
 const TRADES_MAX = 500;
@@ -34,6 +35,13 @@ async function ensureAccounts(redis: ReturnType<typeof createRedis>): Promise<vo
   }
 }
 
+const STRATEGY_LABEL = new Map(STRATEGIES.map((s) => [s.id, s.label]));
+
+const priceText = (price: number, currency?: string): string =>
+  currency === 'USD'
+    ? `$${price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    : `${Math.round(price).toLocaleString('ko-KR')}원`;
+
 async function record(
   redis: ReturnType<typeof createRedis>,
   strategyId: string,
@@ -50,6 +58,16 @@ async function record(
   console.log(
     `[paper-exec:${strategyId}] ${trade.status} ${trade.side} ${trade.name} ${trade.quantity}주 @ ${trade.price.toLocaleString('ko-KR')}${pnl}${trade.rejectReason ? ` (${trade.rejectReason})` : ''}`,
   );
+
+  // 페이퍼 체결 슬랙 알림 (SLACK_PAPER_TRADES=false 로 끌 수 있음)
+  if (trade.status === 'FILLED' && config.slack.paperTrades) {
+    const emoji = trade.side === 'BUY' ? '📈' : '📉';
+    const action = trade.side === 'BUY' ? '매수' : '매도';
+    const label = STRATEGY_LABEL.get(strategyId) ?? strategyId;
+    await sendSlackMessage(
+      `${emoji} [페이퍼·${label}] ${action} ${trade.name} ${trade.quantity.toLocaleString('ko-KR')}주 @ ${priceText(trade.price, trade.currency)}${pnl}\n· ${trade.reason}`,
+    );
+  }
 }
 
 async function main(): Promise<void> {

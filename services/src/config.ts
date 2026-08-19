@@ -67,6 +67,8 @@ export const config = {
       .filter((s): s is 'KR' | 'US' => s === 'KR' || s === 'US'),
     /** 이 심각도 이상만 슬랙 발송. 대시보드에는 전부 표시됩니다. */
     minSeverity: (process.env.SLACK_MIN_SEVERITY ?? 'WARN') as 'INFO' | 'WARN' | 'CRITICAL',
+    /** 페이퍼 체결(매수/매도)도 슬랙으로 발송할지 */
+    paperTrades: (process.env.SLACK_PAPER_TRADES ?? 'true') !== 'false',
   },
   paper: {
     /**
