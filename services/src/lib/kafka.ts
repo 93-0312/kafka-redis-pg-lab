@@ -34,7 +34,16 @@ export interface ResilientConsumerOpts {
   groupId: string;
   topic: string;
   fromBeginning: boolean;
-  eachMessage: (payload: { message: { value: Buffer | null }; partition: number }) => Promise<void>;
+  /** 건별 처리. eachBatch 와 둘 중 하나만 지정합니다 */
+  eachMessage?: (payload: { message: { value: Buffer | null }; partition: number }) => Promise<void>;
+  /**
+   * 묶음 처리. 밀린 오프셋을 따라잡아야 하는 워커(예: DB 적재)는 이 쪽을 씁니다.
+   * chunkSize 단위로 잘라서 넘기고, 청크마다 오프셋을 확정하고 하트비트를 보냅니다 —
+   * 백로그가 커도 리밸런스 타임아웃에 걸려 쫓겨나지 않습니다.
+   */
+  eachBatch?: (payload: { messages: { value: Buffer | null }[]; partition: number }) => Promise<void>;
+  /** eachBatch 청크 크기 (기본 500) */
+  chunkSize?: number;
   /** 이 시간(초) 동안 메시지가 없으면 컨슈머를 재접속합니다 */
   stallSec?: number;
   /** 메시지 처리 성공 시 호출 (진행률 기록용) */
@@ -54,17 +63,46 @@ export interface ResilientConsumerOpts {
  */
 export async function runResilientConsumer(opts: ResilientConsumerOpts): Promise<void> {
   const stallMs = (opts.stallSec ?? 120) * 1000;
+  const chunkSize = opts.chunkSize ?? 500;
   let lastMessageAt = Date.now();
   let restarting = false;
+  let lastRestartAt = 0;
   let consumer: Consumer | null = null;
 
   const start = async (): Promise<void> => {
     consumer = await createConsumer(opts.clientId, opts.groupId);
+    // 조인이 끝난 시점을 스톨 시계의 기준으로 삼습니다. 조인 직후에는 아직 메시지가
+    // 없는 게 정상인데, 이걸 스톨로 오인해 또 재접속하면 그룹에 유령 멤버만 쌓입니다.
+    consumer.on(consumer.events.GROUP_JOIN, () => {
+      lastMessageAt = Date.now();
+    });
     await consumer.subscribe({ topic: opts.topic, fromBeginning: opts.fromBeginning });
+
+    if (opts.eachBatch) {
+      const handle = opts.eachBatch;
+      await consumer.run({
+        eachBatchAutoResolve: false,
+        eachBatch: async ({ batch, resolveOffset, heartbeat, isRunning, isStale }) => {
+          for (let i = 0; i < batch.messages.length; i += chunkSize) {
+            if (!isRunning() || isStale()) break;
+            const chunk = batch.messages.slice(i, i + chunkSize);
+            await handle({ messages: chunk as never, partition: batch.partition });
+            resolveOffset(chunk[chunk.length - 1]!.offset);
+            await heartbeat(); // 청크마다 하트비트 — 백로그 처리 중 쫓겨나지 않도록
+            lastMessageAt = Date.now();
+            opts.onProgress?.();
+          }
+        },
+      });
+      return;
+    }
+
+    const handleOne = opts.eachMessage;
+    if (!handleOne) throw new Error('eachMessage 또는 eachBatch 중 하나는 있어야 합니다');
     await consumer.run({
       eachMessage: async (payload) => {
         lastMessageAt = Date.now();
-        await opts.eachMessage(payload as never);
+        await handleOne(payload as never);
         opts.onProgress?.();
       },
     });
@@ -75,7 +113,12 @@ export async function runResilientConsumer(opts: ResilientConsumerOpts): Promise
   const watchdog = setInterval(() => {
     void (async () => {
       if (restarting || Date.now() - lastMessageAt < stallMs) return;
+      // 재접속 간격 하한: 스톨 창(stallMs) 안에 두 번 재접속하지 않습니다.
+      // 실제 장애(2026-08-19): 조인이 지연되는 컨슈머를 30초마다 재접속시키다
+      // history-worker 그룹에 유령 멤버가 388개까지 쌓여 리밸런싱이 영원히 안 끝났습니다.
+      if (Date.now() - lastRestartAt < stallMs) return;
       restarting = true;
+      lastRestartAt = Date.now();
       console.warn(
         `[${opts.groupId}] ${Math.round((Date.now() - lastMessageAt) / 1000)}초 동안 메시지 없음 — 컨슈머 재접속`,
       );

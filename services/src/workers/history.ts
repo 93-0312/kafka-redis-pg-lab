@@ -13,6 +13,8 @@ import type { TickEvent } from '../types.js';
  *  - 멱등 처리는 Redis 가 아니라 DB 제약(event_id PK + ON CONFLICT DO NOTHING)으로 합니다.
  *    같은 문제를 푸는 두 방식(SET NX vs PK 충돌)을 비교해 보세요
  *  - fromBeginning: true — 처음 켜면 토픽에 남아 있는 과거 틱을 전부 백필합니다
+ *  - 적재는 묶음(eachBatch)으로 합니다. 건별 INSERT 는 밀린 오프셋을 따라잡지 못해서
+ *    리밸런스 타임아웃 → 재조인 → 다시 밀림 의 악순환에 빠집니다 (2026-08-19 실장애)
  */
 
 async function main(): Promise<void> {
@@ -38,33 +40,37 @@ async function main(): Promise<void> {
     topic: config.kafka.topic,
     fromBeginning: true,
     onProgress: () => markProgress(redis, 'history'),
-    eachMessage: async ({ message }) => {
-      if (!message.value) return;
-      const t = JSON.parse(message.value.toString()) as TickEvent;
+    eachBatch: async ({ messages }) => {
+      const ticks = messages
+        .filter((m) => m.value)
+        .map((m) => JSON.parse(m.value!.toString()) as TickEvent);
+      if (ticks.length === 0) return;
+
+      // 한 쿼리에 여러 행 — ($1..$9), ($10..$18), ... 로 펼칩니다.
+      const COLS = 9;
+      const values: unknown[] = [];
+      const rows = ticks.map((t, i) => {
+        values.push(
+          t.eventId, t.symbol, t.name, t.market, t.currency,
+          t.price, t.prevClose, t.tradedAt, t.polledAt,
+        );
+        const base = i * COLS;
+        return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8}, $${base + 9})`;
+      });
 
       const res = await pool.query(
         `INSERT INTO ticks (event_id, symbol, name, market, currency, price, prev_close, traded_at, polled_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         VALUES ${rows.join(', ')}
          ON CONFLICT (event_id) DO NOTHING`,
-        [
-          t.eventId,
-          t.symbol,
-          t.name,
-          t.market,
-          t.currency,
-          t.price,
-          t.prevClose,
-          t.tradedAt,
-          t.polledAt,
-        ],
+        values,
       );
 
-      if (res.rowCount === 1) inserted += 1;
-      else duplicates += 1;
-
-      if ((inserted + duplicates) % 500 === 0) {
-        console.log(`[history] 적재 ${inserted}건 (중복 스킵 ${duplicates}건)`);
-      }
+      const added = res.rowCount ?? 0;
+      inserted += added;
+      duplicates += ticks.length - added;
+      console.log(
+        `[history] 묶음 ${ticks.length}건 적재(신규 ${added}) · 누적 ${inserted}건 (중복 스킵 ${duplicates}건)`,
+      );
     },
   });
 }
