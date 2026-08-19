@@ -45,12 +45,17 @@ async function main(): Promise<void> {
     return;
   }
 
+  // 스냅샷 날짜는 KST 기준 발송일. Postgres 는 UTC 라서 CURRENT_DATE 를 쓰면
+  // 07:30 KST 실행 시 전날(UTC 22:30)로 찍히는 시간대 버그가 있습니다.
+  const now = new Date();
+  const todayKst = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+
   // 1) 오늘 날짜로 스냅샷 upsert
   for (const s of paper.strategies) {
     await pool.query(
       `INSERT INTO paper_equity_daily
          (snapshot_date, strategy_id, equity, cash, positions_value, total_rate, realized_pnl, trade_count)
-       VALUES (CURRENT_DATE, $1, $2, $3, $4, $5, $6, $7)
+       VALUES ($8, $1, $2, $3, $4, $5, $6, $7)
        ON CONFLICT (snapshot_date, strategy_id) DO UPDATE SET
          equity = EXCLUDED.equity, cash = EXCLUDED.cash,
          positions_value = EXCLUDED.positions_value, total_rate = EXCLUDED.total_rate,
@@ -58,7 +63,7 @@ async function main(): Promise<void> {
          created_at = now()`,
       [
         s.strategyId, s.totals.equity, s.totals.cash, s.totals.positionsValue,
-        s.totals.totalRate, s.totals.realizedPnl, s.totals.tradeCount,
+        s.totals.totalRate, s.totals.realizedPnl, s.totals.tradeCount, todayKst,
       ],
     );
   }
@@ -67,8 +72,9 @@ async function main(): Promise<void> {
   const prev = await pool.query(
     `SELECT strategy_id, equity FROM paper_equity_daily
      WHERE snapshot_date = (
-       SELECT max(snapshot_date) FROM paper_equity_daily WHERE snapshot_date < CURRENT_DATE
+       SELECT max(snapshot_date) FROM paper_equity_daily WHERE snapshot_date < $1
      )`,
+    [todayKst],
   );
   const prevEquity = new Map<string, number>(
     prev.rows.map((r) => [r.strategy_id as string, Number(r.equity)]),
