@@ -7,7 +7,7 @@ import { PortfolioPanel } from '@/components/PortfolioPanel';
 import { PriceChart } from '@/components/PriceChart';
 import { QuoteTable } from '@/components/QuoteTable';
 import { signPct, upDown } from '@/lib/format';
-import type { Market, PriceAlert } from '@/lib/types';
+import type { ChartInterval, Market, PriceAlert } from '@/lib/types';
 import { useDashboardStream } from '@/lib/useDashboardStream';
 
 const STATUS_TEXT = {
@@ -33,7 +33,8 @@ const alertMarket = (a: PriceAlert): Market => a.market ?? (/^\d{6}$/.test(a.sym
 export default function Page() {
   const [tab, setTab] = useState<Tab>('KR');
   const [focus, setFocus] = useState<string | undefined>(undefined);
-  const { summary, alerts, state } = useDashboardStream(focus);
+  const [chartInterval, setChartInterval] = useState<ChartInterval>('1m');
+  const { summary, alerts, state } = useDashboardStream(focus, chartInterval);
 
   const market: Market = tab === 'PF' || tab === 'PAPER' ? 'KR' : tab;
   const quotes = (summary?.quotes ?? []).filter((q) => q.market === market);
@@ -118,17 +119,30 @@ export default function Page() {
       </section>
 
       <section className="card" style={{ marginBottom: 12 }}>
-        <p className="panel-title">
-          {focusQuote ? `${focusQuote.name} 1분봉` : '1분봉 차트'}
+        <p className="panel-title" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          {focusQuote ? `${focusQuote.name} ${chartInterval === '1d' ? '일봉' : '1분봉'}` : '차트'}
           {focusQuote && (
-            <span style={{ marginLeft: 10, color: COLOR[upDown(focusQuote.changeRate)], fontSize: 13 }}>
+            <span style={{ color: COLOR[upDown(focusQuote.changeRate)], fontSize: 13 }}>
               {signPct(focusQuote.changeRate)}
             </span>
           )}
+          <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 4 }}>
+            {(['1m', '1d'] as const).map((iv) => (
+              <button
+                key={iv}
+                className={`tab ${chartInterval === iv ? 'active' : ''}`}
+                style={{ padding: '3px 12px', fontSize: 12 }}
+                onClick={() => setChartInterval(iv)}
+              >
+                {iv === '1m' ? '분' : '일'}
+              </button>
+            ))}
+          </span>
         </p>
         <p className="panel-desc">
-          quote 워커가 틱 스트림을 롤업한 캔들(<code>mkt:candle:*</code>)입니다. 회색 점선은 전일 종가,
-          노랑은 MA20, 보라는 볼린저밴드(20, 2σ) — 전일까지의 일봉으로 계산한 값입니다.
+          {chartInterval === '1d'
+            ? '토스 일봉 80개. 노랑 곡선은 MA20(20일), 보라는 볼린저밴드(20일, 2σ).'
+            : '틱 스트림을 롤업한 당일 1분봉. 노랑 곡선은 MA20(20분), 보라는 볼린저밴드(20분, 2σ), 노랑 점선은 전략 기준선인 일MA20, 회색 점선은 전일 종가.'}
           {summary?.indicators && (
             <span style={{ marginLeft: 8 }}>
               {summary.indicators.rsi14 !== null && (
@@ -154,6 +168,7 @@ export default function Page() {
             currency={focusQuote.currency}
             prevClose={focusQuote.prevClose}
             indicators={summary?.indicators}
+            interval={summary?.interval ?? chartInterval}
           />
         ) : (
           <div className="empty">차트를 불러오는 중…</div>

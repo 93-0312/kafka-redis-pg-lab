@@ -40,10 +40,13 @@ export interface DashboardSummary {
     flat: number;
   };
   focus: string | null;
+  interval: '1m' | '1d';
   candles: ({ t: string } & MinuteCandle)[];
   indicators: FocusIndicators | null;
   generatedAt: string;
 }
+
+export type ChartInterval = '1m' | '1d';
 
 export interface PortfolioItem {
   symbol: string;

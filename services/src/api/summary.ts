@@ -1,7 +1,10 @@
 import type Redis from 'ioredis';
+import type { DailyCandle } from '../domain/indicators.js';
 import { dateKey } from '../domain/quotes.js';
 import { K } from '../lib/keys.js';
 import type { Currency, Market, MinuteCandle, QuoteSnapshot } from '../types.js';
+
+export type ChartInterval = '1m' | '1d';
 
 export interface FocusIndicators {
   ma20: number | null;
@@ -20,8 +23,9 @@ export interface DashboardSummary {
     down: number;
     flat: number;
   };
-  /** focus 종목의 1분봉 (최근 60분) */
+  /** focus 종목의 캔들. interval='1m' 이면 1분봉(최근 60개), '1d' 면 일봉(최근 60개) */
   focus: string | null;
+  interval: ChartInterval;
   candles: ({ t: string } & MinuteCandle)[];
   /** focus 종목의 일봉 지표 (전략 워커가 30분마다 게시한 as-of 값) */
   indicators: FocusIndicators | null;
@@ -33,7 +37,12 @@ const n = (v: string | undefined | null): number => {
   return Number.isFinite(parsed) ? parsed : 0;
 };
 
-export async function readSummary(redis: Redis, focusParam?: string): Promise<DashboardSummary> {
+export async function readSummary(
+  redis: Redis,
+  focusParam?: string,
+  intervalParam?: string,
+): Promise<DashboardSummary> {
+  const interval: ChartInterval = intervalParam === '1d' ? '1d' : '1m';
   const symbols = await redis.smembers(K.symbolIndex);
 
   const pipe = redis.pipeline();
@@ -72,11 +81,25 @@ export async function readSummary(redis: Redis, focusParam?: string): Promise<Da
   let candles: DashboardSummary['candles'] = [];
   let indicators: FocusIndicators | null = null;
   if (focus) {
-    const raw = await redis.hgetall(K.candle(focus, dateKey()));
-    candles = Object.entries(raw)
-      .map(([t, v]) => ({ t, ...(JSON.parse(v) as MinuteCandle) }))
-      .sort((a, b) => a.t.localeCompare(b.t))
-      .slice(-60);
+    if (interval === '1d') {
+      // 일 모드: 전략 워커가 게시한 토스 일봉 원본을 사용합니다.
+      const raw = await redis.get(K.dailyCandles(focus));
+      if (raw) {
+        candles = (JSON.parse(raw) as DailyCandle[])
+          .sort((a, b) => a.timestamp.localeCompare(b.timestamp))
+          .slice(-60)
+          .map((c) => ({
+            t: dateKey(c.timestamp),
+            o: c.open, h: c.high, l: c.low, c: c.close, n: c.volume,
+          }));
+      }
+    } else {
+      const raw = await redis.hgetall(K.candle(focus, dateKey()));
+      candles = Object.entries(raw)
+        .map(([t, v]) => ({ t, ...(JSON.parse(v) as MinuteCandle) }))
+        .sort((a, b) => a.t.localeCompare(b.t))
+        .slice(-60);
+    }
 
     const ind = await redis.hgetall(K.indicators(focus));
     if (ind['updatedAt']) {
@@ -93,5 +116,5 @@ export async function readSummary(redis: Redis, focusParam?: string): Promise<Da
     }
   }
 
-  return { quotes, totals, focus, candles, indicators, generatedAt: new Date().toISOString() };
+  return { quotes, totals, focus, interval, candles, indicators, generatedAt: new Date().toISOString() };
 }

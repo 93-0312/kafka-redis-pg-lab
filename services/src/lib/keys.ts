@@ -30,6 +30,8 @@ export const K = {
 
   /** HASH: 종목별 일봉 지표 (as-of 오늘). strategy 워커가 30분마다 게시, 대시보드가 표시 */
   indicators: (symbol: string) => `mkt:indicators:${symbol}`,
+  /** STRING(JSON): 종목별 일봉 원본 (차트 일 모드용). strategy 워커가 30분마다 게시 */
+  dailyCandles: (symbol: string) => `mkt:dailycandles:${symbol}`,
 
   /** HASH: 전략별 페이퍼 계좌 (cash, initialCash, startedAt) */
   paperAccount: (strategy: string) => `mkt:paper:${strategy}:account`,

@@ -55,7 +55,8 @@ app.get('/api/health', async (_req: Request, res: Response) => {
 
 app.get('/api/summary', async (req: Request, res: Response) => {
   const focus = typeof req.query['focus'] === 'string' ? req.query['focus'] : undefined;
-  res.json(await readSummary(redis, focus));
+  const interval = typeof req.query['interval'] === 'string' ? req.query['interval'] : undefined;
+  res.json(await readSummary(redis, focus, interval));
 });
 
 app.get('/api/portfolio', async (_req: Request, res: Response) => {
@@ -96,10 +97,11 @@ app.get('/api/stream', async (req: Request, res: Response) => {
   clients.add(res);
 
   const focus = typeof req.query['focus'] === 'string' ? req.query['focus'] : undefined;
+  const interval = typeof req.query['interval'] === 'string' ? req.query['interval'] : undefined;
 
   const pushSnapshot = async () => {
     try {
-      const summary = await readSummary(redis, focus);
+      const summary = await readSummary(redis, focus, interval);
       res.write(`event: snapshot\ndata: ${JSON.stringify(summary)}\n\n`);
     } catch (err) {
       console.error('[api] snapshot 실패', err);

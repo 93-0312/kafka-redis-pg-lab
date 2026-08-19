@@ -69,9 +69,10 @@ async function refreshIndicators(
   if (bySymbol.size === 0) return;
   indicatorStore = new AsOfIndicatorStore(bySymbol, dateKey);
 
-  // 대시보드 표시용으로 오늘 기준 as-of 지표를 Redis 에 게시합니다.
+  // 대시보드 표시용으로 오늘 기준 as-of 지표 + 일봉 원본을 Redis 에 게시합니다.
   const today = dateKey();
-  for (const symbol of bySymbol.keys()) {
+  for (const [symbol, candles] of bySymbol.entries()) {
+    await redis.set(K.dailyCandles(symbol), JSON.stringify(candles));
     const ind = indicatorStore.get(symbol, today);
     await redis.hset(K.indicators(symbol), {
       ma20: ind.ma20 !== null ? String(ind.ma20) : '',

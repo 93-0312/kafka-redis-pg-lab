@@ -14,7 +14,7 @@ export type ConnState = 'connecting' | 'live' | 'error';
  *  - alert 이벤트   : Redis Pub/Sub 으로 흘러온 가격 알림 (발생 즉시)
  * focus 종목이 바뀌면 EventSource 를 다시 연결합니다.
  */
-export function useDashboardStream(focus?: string) {
+export function useDashboardStream(focus?: string, interval?: string) {
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [alerts, setAlerts] = useState<PriceAlert[]>([]);
   const [state, setState] = useState<ConnState>('connecting');
@@ -34,6 +34,7 @@ export function useDashboardStream(focus?: string) {
   useEffect(() => {
     const url = new URL(`${API_BASE}/api/stream`);
     if (focus) url.searchParams.set('focus', focus);
+    if (interval) url.searchParams.set('interval', interval);
     const es = new EventSource(url);
 
     es.addEventListener('open', () => setState('live'));
@@ -50,7 +51,7 @@ export function useDashboardStream(focus?: string) {
     es.addEventListener('error', () => setState('error'));
 
     return () => es.close();
-  }, [focus]);
+  }, [focus, interval]);
 
   return { summary, alerts, state };
 }
