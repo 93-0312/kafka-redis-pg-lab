@@ -303,9 +303,11 @@ test('positionSize: 현금 비중으로 정수 수량, 1주 미만이면 0', () 
   assert.equal(positionSize(0, 10, 70_000), 0);
 });
 
-test('isRegularSession: KRX 09:00~15:30 KST', () => {
+test('isRegularSession: KRX 09:00~15:19 (마감 동시호가 제외)', () => {
   assert.equal(isRegularSession('KR', '2026-08-18T10:00:00+09:00'), true);  // 화요일 장중
-  assert.equal(isRegularSession('KR', '2026-08-18T08:50:00+09:00'), false); // 개장 전
+  assert.equal(isRegularSession('KR', '2026-08-18T15:19:00+09:00'), true);  // 연속 체결 마지막 분
+  assert.equal(isRegularSession('KR', '2026-08-18T15:25:00+09:00'), false); // 동시호가 — 예상체결가 구간
+  assert.equal(isRegularSession('KR', '2026-08-18T08:50:00+09:00'), false); // 개장 전 동시호가
   assert.equal(isRegularSession('KR', '2026-08-18T17:00:00+09:00'), false); // NXT 시간외
   assert.equal(isRegularSession('KR', '2026-08-22T10:00:00+09:00'), false); // 토요일
 });

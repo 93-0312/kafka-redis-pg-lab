@@ -174,12 +174,16 @@ export function positionSize(cash: number, positionPct: number, price: number): 
 }
 
 /**
- * 정규장 여부 판정.
- *  - KR: KRX 정규장 09:00~15:30 KST (NXT 프리/애프터마켓 제외)
- *  - US: 09:30~16:00 ET (Intl 타임존 변환이라 서머타임 자동 반영, 프리/애프터 제외)
+ * "연속 체결이 가능한 정규장" 여부 판정 (신규 진입 허용 창).
+ *  - KR: 09:00~15:19 KST — 마감 동시호가(15:20~15:30) 제외.
+ *    동시호가 중 시세는 예상체결가라 실제로는 그 가격에 체결될 수 없는데,
+ *    시뮬레이터는 즉시 체결을 가정하므로 이 구간의 진입은 가짜 체결이 됩니다.
+ *    (NXT 프리/애프터마켓도 제외)
+ *  - US: 09:30~16:00 ET (연속 체결, 서머타임 자동 반영, 프리/애프터 제외)
  * 시간외는 유동성이 얇아 적은 거래로도 신고가·급등이 만들어지므로,
  * 돌파 계열 전략은 정규장 신호만 믿는 것이 안전합니다.
  * 휴장일은 신선한 틱 자체가 없어서(stale 가드) 별도 처리가 필요 없습니다.
+ * 청산에는 적용하지 않습니다 — 동시호가 중 청산 주문은 현실에서도 단일가에 체결됩니다.
  */
 export function isRegularSession(market: 'KR' | 'US', isoTime: string): boolean {
   const d = new Date(isoTime);
@@ -196,7 +200,7 @@ export function isRegularSession(market: 'KR' | 'US', isoTime: string): boolean 
   const weekday = get('weekday');
   if (weekday === 'Sat' || weekday === 'Sun') return false;
   const hm = Number(get('hour')) * 100 + Number(get('minute'));
-  return market === 'KR' ? hm >= 900 && hm <= 1530 : hm >= 930 && hm <= 1600;
+  return market === 'KR' ? hm >= 900 && hm <= 1519 : hm >= 930 && hm <= 1600;
 }
 
 /** 틱이 너무 오래됐으면 매매하지 않습니다 (장 마감 후 정지 시세 방지) */
