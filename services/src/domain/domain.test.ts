@@ -10,7 +10,14 @@ import {
 } from './alerts.js';
 import { AsOfIndicatorStore, computeDailyIndicators, type DailyCandle } from './indicators.js';
 import { changeRate, mergeCandle, minuteBucket, pickPrevClose } from './quotes.js';
-import { STRATEGIES, decide, isStale, positionSize, type MarketCtx } from './strategy.js';
+import {
+  STRATEGIES,
+  decide,
+  isRegularSession,
+  isStale,
+  positionSize,
+  type MarketCtx,
+} from './strategy.js';
 import type { PaperPosition, TickEvent } from '../types.js';
 
 const tick = (over: Partial<TickEvent> = {}): TickEvent => ({
@@ -294,6 +301,36 @@ test('positionSize: 현금 비중으로 정수 수량, 1주 미만이면 0', () 
   assert.equal(positionSize(10_000_000, 10, 70_000), 14);
   assert.equal(positionSize(10_000_000, 10, 1_650_000), 0);
   assert.equal(positionSize(0, 10, 70_000), 0);
+});
+
+test('isRegularSession: KRX 09:00~15:30 KST', () => {
+  assert.equal(isRegularSession('KR', '2026-08-18T10:00:00+09:00'), true);  // 화요일 장중
+  assert.equal(isRegularSession('KR', '2026-08-18T08:50:00+09:00'), false); // 개장 전
+  assert.equal(isRegularSession('KR', '2026-08-18T17:00:00+09:00'), false); // NXT 시간외
+  assert.equal(isRegularSession('KR', '2026-08-22T10:00:00+09:00'), false); // 토요일
+});
+
+test('isRegularSession: 미국 09:30~16:00 ET (서머타임 자동)', () => {
+  // 8월(DST): 23:00 KST = 10:00 ET → 정규장
+  assert.equal(isRegularSession('US', '2026-08-18T23:00:00+09:00'), true);
+  // 18:00 KST = 05:00 ET → 프리마켓
+  assert.equal(isRegularSession('US', '2026-08-18T18:00:00+09:00'), false);
+  // 07:00 KST = 18:00 ET (전일) → 애프터마켓 종료 후
+  assert.equal(isRegularSession('US', '2026-08-18T07:00:00+09:00'), false);
+});
+
+test('highbreak: 정규장 밖에서는 신고가 갱신에도 진입하지 않는다', () => {
+  const def = byId('highbreak');
+  const inSession = tick({ price: 74000, tradedAt: '2026-08-18T10:00:00+09:00' });
+  const offSession = tick({ price: 74000, tradedAt: '2026-08-18T17:00:00+09:00' }); // NXT 시간외
+  const ctx = { ...CTX, dayHigh: 73900 };
+  assert.equal(decide(inSession, 0.01, null, ctx, def)?.side, 'BUY');
+  assert.equal(decide(offSession, 0.01, null, ctx, def), null);
+  // 청산(익절/손절)은 시간외에도 정상 동작해야 합니다
+  assert.match(
+    decide(tick({ price: 71500, tradedAt: '2026-08-18T17:00:00+09:00' }), 0, position(70000), CTX, def)?.reason ?? '',
+    /익절/,
+  );
 });
 
 test('isStale: 오래된 틱은 매매 금지', () => {

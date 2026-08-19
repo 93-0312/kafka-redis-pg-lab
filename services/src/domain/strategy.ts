@@ -41,6 +41,8 @@ export interface StrategyDef {
   stopLossPct: number;
   /** 동적 손절 폭(%). 지정 시 stopLossPct 대신 사용 (예: ATR 기반) */
   dynamicStopPct?: (ctx: MarketCtx) => number;
+  /** true 면 정규장(KRX 09:00~15:30 / US 09:30~16:00 ET)에서만 신규 진입. 청산은 항상 허용 */
+  regularSessionOnly?: boolean;
 }
 
 /** 지표 필터 헬퍼: 지표가 없으면 통과 (보조 확인이지 필수 조건이 아님) */
@@ -112,7 +114,9 @@ export const STRATEGIES: StrategyDef[] = [
   {
     id: 'highbreak',
     label: '신고가돌파',
-    description: '당일 고가 갱신 + 상승 중일 때 매수 · 익절 +2% / 손절 -1% (비대칭)',
+    description:
+      '당일 고가 갱신 + 상승 중일 때 매수 (정규장 한정 — 시간외 얇은 유동성의 가짜 돌파 배제) · 익절 +2% / 손절 -1%',
+    regularSessionOnly: true,
     entry: (t, rate, ctx) =>
       ctx.dayHigh !== null && t.price > ctx.dayHigh && rate > 0
         ? `신고가 돌파: 당일 고가 ${ctx.dayHigh.toLocaleString('ko-KR')} 갱신 (${pct(rate)})`
@@ -149,6 +153,11 @@ export function decide(
     return null;
   }
 
+  // 정규장 전용 전략은 시간외·프리마켓에서 신규 진입하지 않습니다 (청산은 위에서 이미 처리됨)
+  if (def.regularSessionOnly && !isRegularSession(tick.market, tick.tradedAt ?? tick.polledAt)) {
+    return null;
+  }
+
   const reason = def.entry(tick, changeRate, ctx);
   return reason ? { side: 'BUY', reason } : null;
 }
@@ -157,6 +166,32 @@ export function decide(
 export function positionSize(cash: number, positionPct: number, price: number): number {
   if (price <= 0 || cash <= 0) return 0;
   return Math.floor((cash * positionPct) / 100 / price);
+}
+
+/**
+ * 정규장 여부 판정.
+ *  - KR: KRX 정규장 09:00~15:30 KST (NXT 프리/애프터마켓 제외)
+ *  - US: 09:30~16:00 ET (Intl 타임존 변환이라 서머타임 자동 반영, 프리/애프터 제외)
+ * 시간외는 유동성이 얇아 적은 거래로도 신고가·급등이 만들어지므로,
+ * 돌파 계열 전략은 정규장 신호만 믿는 것이 안전합니다.
+ * 휴장일은 신선한 틱 자체가 없어서(stale 가드) 별도 처리가 필요 없습니다.
+ */
+export function isRegularSession(market: 'KR' | 'US', isoTime: string): boolean {
+  const d = new Date(isoTime);
+  if (Number.isNaN(d.getTime())) return false;
+  const zone = market === 'KR' ? 'Asia/Seoul' : 'America/New_York';
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: zone,
+    hour12: false,
+    weekday: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).formatToParts(d);
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? '';
+  const weekday = get('weekday');
+  if (weekday === 'Sat' || weekday === 'Sun') return false;
+  const hm = Number(get('hour')) * 100 + Number(get('minute'));
+  return market === 'KR' ? hm >= 900 && hm <= 1530 : hm >= 930 && hm <= 1600;
 }
 
 /** 틱이 너무 오래됐으면 매매하지 않습니다 (장 마감 후 정지 시세 방지) */
