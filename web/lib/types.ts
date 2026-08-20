@@ -140,6 +140,14 @@ export interface PaperSummary {
   generatedAt: string;
 }
 
+export interface PaperDailyRow {
+  date: string;
+  strategyId: string;
+  equity: number;
+  dailyPnl: number;
+  dailyRate: number;
+}
+
 export interface PriceAlert {
   alertId: string;
   type: 'SURGE' | 'PLUNGE' | 'SPIKE' | 'REBOUND' | 'PULLBACK';

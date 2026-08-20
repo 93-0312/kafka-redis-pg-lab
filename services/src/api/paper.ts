@@ -119,6 +119,65 @@ async function readStrategy(
   };
 }
 
+export interface PaperDailyRow {
+  /** 스냅샷 날짜 (07:30 기준). 'live' 는 마지막 스냅샷 이후 현재까지 진행분 */
+  date: string;
+  strategyId: string;
+  equity: number;
+  /** 직전 스냅샷 대비 손익 (첫 행은 초기 자금 대비) */
+  dailyPnl: number;
+  dailyRate: number;
+}
+
+/**
+ * 날짜별 손익. 아침 브리핑이 매일 07:30 에 남기는 자산 스냅샷의 차분입니다.
+ * "하루" = 전일 07:30 → 당일 07:30 (국장 + 밤 미장 한 사이클).
+ * 마지막에 현재 자산 기준 진행분(live)을 덧붙입니다.
+ */
+export async function readPaperDaily(
+  redis: Redis,
+  pool: { query: (sql: string) => Promise<{ rows: Record<string, unknown>[] }> },
+): Promise<PaperDailyRow[]> {
+  const res = await pool.query(
+    `SELECT snapshot_date::text AS date, strategy_id, equity::float8 AS equity
+     FROM paper_equity_daily ORDER BY snapshot_date ASC`,
+  );
+
+  const out: PaperDailyRow[] = [];
+  const prevEquity = new Map<string, number>();
+
+  for (const r of res.rows) {
+    const sid = String(r['strategy_id']);
+    const equity = Number(r['equity']);
+    // 첫 스냅샷의 기준은 해당 전략 계좌의 초기 자금
+    const base =
+      prevEquity.get(sid) ??
+      (n(await redis.hget(K.paperAccount(sid), 'initialCash')) || equity);
+    out.push({
+      date: String(r['date']),
+      strategyId: sid,
+      equity,
+      dailyPnl: equity - base,
+      dailyRate: base > 0 ? (equity - base) / base : 0,
+    });
+    prevEquity.set(sid, equity);
+  }
+
+  // 진행분: 현재 자산 vs 마지막 스냅샷
+  const current = await readPaper(redis);
+  for (const s of current.strategies) {
+    const base = prevEquity.get(s.strategyId) ?? s.totals.initialCash;
+    out.push({
+      date: 'live',
+      strategyId: s.strategyId,
+      equity: s.totals.equity,
+      dailyPnl: s.totals.equity - base,
+      dailyRate: base > 0 ? (s.totals.equity - base) / base : 0,
+    });
+  }
+  return out;
+}
+
 export async function readPaper(redis: Redis): Promise<PaperSummary> {
   // 미국 주식 포지션 평가용 환율 (strategy 워커가 30분마다 갱신)
   const usdKrw = n(await redis.get(K.fxUsdKrw)) || 1400;

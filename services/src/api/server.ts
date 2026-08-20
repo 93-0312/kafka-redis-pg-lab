@@ -5,7 +5,8 @@ import { config } from '../config.js';
 import { checkHeartbeats, checkProgress, startHeartbeat } from '../lib/heartbeat.js';
 import { K } from '../lib/keys.js';
 import { createRedis } from '../lib/redis.js';
-import { readPaper } from './paper.js';
+import { createPool } from '../lib/pg.js';
+import { readPaper, readPaperDaily } from './paper.js';
 import { readPortfolio } from './portfolio.js';
 import { readSummary } from './summary.js';
 
@@ -16,6 +17,8 @@ app.use(cors());
 const redis = createRedis('api');
 /** 구독용 커넥션 — SUBSCRIBE 상태에서는 일반 명령을 쓸 수 없으므로 반드시 분리합니다. */
 const sub = createRedis('api-sub');
+/** 일별 손익 스냅샷 조회용 Postgres 풀 */
+const pool = createPool();
 
 /** 접속 중인 SSE 클라이언트 목록 */
 const clients = new Set<Response>();
@@ -74,6 +77,14 @@ app.get('/api/paper', async (_req: Request, res: Response) => {
     return;
   }
   res.json(summary);
+});
+
+app.get('/api/paper/daily', async (_req: Request, res: Response) => {
+  try {
+    res.json(await readPaperDaily(redis, pool));
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message });
+  }
 });
 
 app.get('/api/alerts', async (_req: Request, res: Response) => {

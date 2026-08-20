@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { clock, money, signPct, upDown } from '@/lib/format';
-import type { PaperSummary, PaperStrategySummary } from '@/lib/types';
+import type { PaperDailyRow, PaperSummary, PaperStrategySummary } from '@/lib/types';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? 'http://localhost:4000';
 const REFRESH_MS = 5_000;
@@ -50,8 +50,55 @@ function StrategyCard({
   );
 }
 
+/** 선택 전략의 일별 손익 (바 + 표). 마지막 'live' 행은 오늘 07:30 이후 진행분 */
+function DailyPnl({ rows }: { rows: PaperDailyRow[] }) {
+  if (rows.length === 0) {
+    return <div className="empty">아직 일별 스냅샷이 없습니다 (매일 07:30 기록, 내일부터 쌓입니다).</div>;
+  }
+  const maxAbs = Math.max(...rows.map((r) => Math.abs(r.dailyPnl)), 1);
+  const label = (d: string) => (d === 'live' ? '진행 중' : `${d.slice(5, 7)}/${d.slice(8, 10)}`);
+  return (
+    <table>
+      <thead>
+        <tr>
+          <th>구간(~07:30)</th>
+          <th>일 손익</th>
+          <th style={{ width: '40%' }} />
+          <th>수익률</th>
+          <th>자산</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((r) => {
+          const d = upDown(r.dailyPnl);
+          const w = Math.round((Math.abs(r.dailyPnl) / maxAbs) * 100);
+          return (
+            <tr key={r.date} style={r.date === 'live' ? { opacity: 0.85 } : undefined}>
+              <td>{label(r.date)}</td>
+              <td style={{ color: COLOR[d], fontWeight: 600 }}>{signKrw(r.dailyPnl)}</td>
+              <td>
+                <div style={{ display: 'flex', justifyContent: 'center' }}>
+                  <div
+                    style={{
+                      width: `${w}%`, minWidth: r.dailyPnl === 0 ? 0 : 2, height: 10,
+                      borderRadius: 3, background: COLOR[d], opacity: 0.75,
+                    }}
+                  />
+                </div>
+              </td>
+              <td style={{ color: COLOR[d] }}>{signPct(r.dailyRate)}</td>
+              <td>{krw(r.equity)}</td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+}
+
 export function PaperPanel() {
   const [pf, setPf] = useState<PaperSummary | null>(null);
+  const [daily, setDaily] = useState<PaperDailyRow[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
 
@@ -68,6 +115,8 @@ export function PaperPanel() {
         }
         setError(null);
         setPf(json as PaperSummary);
+        const dres = await fetch(`${API_BASE}/api/paper/daily`);
+        if (dres.ok && alive) setDaily((await dres.json()) as PaperDailyRow[]);
       } catch {
         if (alive) setError('API 서버(4000)에 연결할 수 없습니다.');
       }
@@ -132,6 +181,15 @@ export function PaperPanel() {
             <div className="hint">포지션 {krw(t.positionsValue)}</div>
           </div>
         </div>
+      </section>
+
+      <section className="card" style={{ marginBottom: 12 }}>
+        <p className="panel-title">일별 손익 — {cur.label}</p>
+        <p className="panel-desc">
+          하루 = 전일 07:30 → 당일 07:30 (국장 + 밤 미장 한 사이클, 아침 브리핑 스냅샷 기준).
+          마지막 행은 오늘 07:30 이후 실시간 진행분.
+        </p>
+        <DailyPnl rows={daily.filter((r) => r.strategyId === cur.strategyId)} />
       </section>
 
       <div className="cols">
