@@ -8,7 +8,13 @@ import {
   isSpike,
   levelSeverity,
 } from './alerts.js';
-import { AsOfIndicatorStore, computeDailyIndicators, type DailyCandle } from './indicators.js';
+import {
+  AsOfIndicatorStore,
+  EMPTY_INDICATORS,
+  computeDailyIndicators,
+  type DailyCandle,
+  type DailyIndicators,
+} from './indicators.js';
 import { changeRate, mergeCandle, minuteBucket, pickPrevClose } from './quotes.js';
 import {
   STRATEGIES,
@@ -232,6 +238,71 @@ test('트레일링 익절: 익절선 위에서 고점 대비 되밀리면 청산
   assert.match(decide(tick({ price: 68_900 }), 0, position(70_000, 71_100), CTX, def)?.reason ?? '', /손절/);
 });
 
+// ATR 이 큰 장에서 고정 폭이 노이즈에 먼저 걸리는 문제(평균회귀 승률 1/9)에 대한 회귀 테스트
+const daily = (atrPct: number | null, over: Partial<DailyIndicators> = {}): DailyIndicators => ({
+  ...EMPTY_INDICATORS, atrPct, ma20: 60_000, rsi14: 50, ...over,
+});
+
+test('volAdaptive: ATR 이 크면 익절·손절·트레일링 폭이 같은 배율로 넓어진다', () => {
+  const def = byId('meanrevert'); // 기준 익절 +1.5% · 손절 -1.5% · 트레일 -0.8%
+  const hot = { ...CTX, daily: daily(9) }; // ATR 9% → 배율 3 → 손절 -4.5% · 익절 +4.5%
+
+  // -4.29% 는 기존이라면 손절이지만, ATR 9% 장에서는 노이즈 범위로 보고 버팁니다
+  assert.equal(decide(tick({ price: 67_000 }), 0, position(70_000), hot, def), null);
+  // -4.57% 로 넓어진 손절선을 넘기면 그때 청산
+  assert.match(decide(tick({ price: 66_800 }), 0, position(70_000), hot, def)?.reason ?? '', /손절/);
+
+  // 익절선도 같이 넓어져 손익비가 보존됩니다 (+1.5% 에서 팔지 않음)
+  assert.equal(decide(tick({ price: 71_100 }), 0, position(70_000, 71_100), hot, def), null);
+});
+
+test('volAdaptive: 배율은 1~3배로 제한되고, 지표가 없으면 기존 폭 그대로다', () => {
+  const def = byId('meanrevert');
+  // 조용한 장(ATR 1%)에서 폭을 좁히지는 않습니다 — 좁히면 과매매로 되돌아갑니다
+  assert.match(
+    decide(tick({ price: 68_900 }), 0, position(70_000), { ...CTX, daily: daily(1) }, def)?.reason ?? '',
+    /손절/,
+  );
+  // ATR 30% 라도 손절은 -4.5% 에서 멈춥니다 (상한 3배) — 킬 스위치보다 먼저 걸리게
+  assert.match(
+    decide(tick({ price: 66_800 }), 0, position(70_000), { ...CTX, daily: daily(30) }, def)?.reason ?? '',
+    /손절/,
+  );
+  // 지표 부트스트랩 전(atrPct null)에는 기존 동작
+  assert.match(
+    decide(tick({ price: 68_900 }), 0, position(70_000), { ...CTX, daily: daily(null) }, def)?.reason ?? '',
+    /손절/,
+  );
+});
+
+test('volAdaptive 를 켜지 않은 전략은 ATR 과 무관하게 고정 폭을 쓴다', () => {
+  const def = byId('momentum'); // volAdaptive 없음
+  assert.match(
+    decide(tick({ price: 67_000 }), 0, position(70_000), { ...CTX, daily: daily(9) }, def)?.reason ?? '',
+    /손절/,
+  );
+});
+
+test('scalper: 진입 문턱도 ATR 에 비례해 올라간다 (과매매 억제)', () => {
+  const def = byId('scalper'); // 기준 문턱 1분 +0.3%
+  const hot = (shortChange: number): MarketCtx => ({
+    ...CTX, shortChange, prevShortChange: 0.001, daily: daily(9), // ATR 9% → 문턱 0.9%
+  });
+
+  // ATR 9% 장에서 1분 +0.5% 는 노이즈 — 기존이라면 진입했을 자리입니다
+  assert.equal(decide(tick(), 0.01, null, hot(0.005), def), null);
+  // 문턱을 넘으면 진입하고, 사유에 실제 적용된 문턱이 찍힙니다
+  const buy = decide(tick(), 0.01, null, hot(0.0095), def);
+  assert.equal(buy?.side, 'BUY');
+  assert.match(buy?.reason ?? '', /\+0\.90% 상향 돌파/);
+
+  // 조용한 장(지표 없음)에서는 기존 0.3% 문턱 그대로
+  assert.equal(
+    decide(tick(), 0.01, null, { ...CTX, shortChange: 0.005, prevShortChange: 0.001 }, def)?.side,
+    'BUY',
+  );
+});
+
 test('trackPeak: 보유 중 최고가만 올라가고 내려가지 않는다', () => {
   const pos = position(70_000);
   assert.equal(trackPeak(pos, 69_000), 70_000); // 평단 아래면 평단 유지
@@ -287,15 +358,15 @@ test('AsOfIndicatorStore: 해당일 이전 봉만 사용 (선견 편향 방지)'
   assert.equal(d4.ma20, null);
 });
 
-test('전략 지표 필터: RSI 과매도/MA20 추세 확인', () => {
+test('전략 지표 필터: RSI 과열 제외/MA20 추세 확인', () => {
   const mr = byId('meanrevert');
   const crossing = { ...CTX, prevRate: -0.01 };
   // RSI 70 (과매도 아님) → meanrevert 진입 거부
   assert.equal(
-    decide(tick(), -0.021, null, { ...crossing, daily: { ...emptyDaily, rsi14: 70 } }, mr), null);
+    decide(tick(), -0.021, null, { ...crossing, daily: { ...emptyDaily, rsi14: 75 } }, mr), null);
   // RSI 30 → 진입
   assert.equal(
-    decide(tick(), -0.021, null, { ...crossing, daily: { ...emptyDaily, rsi14: 30 } }, mr)?.side, 'BUY');
+    decide(tick(), -0.021, null, { ...crossing, daily: { ...emptyDaily, rsi14: 65 } }, mr)?.side, 'BUY');
   // 지표 없으면 통과 (보조 확인 원칙)
   assert.equal(decide(tick(), -0.021, null, crossing, mr)?.side, 'BUY');
 
@@ -311,11 +382,11 @@ test('전략 지표 필터: RSI 과매도/MA20 추세 확인', () => {
 
 test('deepdip: ATR 기반 동적 손절 — 변동성 크면 손절 폭 확대', () => {
   const dd = byId('deepdip');
-  const highVol = { ...CTX, daily: { ...emptyDaily, atrPct: 4 } }; // 손절 = max(3, 6) = 6%
-  // 평단 70000, 현재 66500 = -5% : 고정 -3% 면 손절이지만 ATR 손절(-6%)로는 홀드
-  assert.equal(decide(tick({ price: 66500 }), 0, position(70000), highVol, dd), null);
-  // -6.5% 면 ATR 손절도 발동
-  assert.match(decide(tick({ price: 65400 }), 0, position(70000), highVol, dd)?.reason ?? '', /손절/);
+  const highVol = { ...CTX, daily: { ...emptyDaily, atrPct: 4 } }; // 손절 = min(5, max(3, 6)) = 5% (상한)
+  // 평단 70000, 현재 67000 = -4.29% : 고정 -3% 면 손절이지만 ATR 손절(-5%)로는 홀드
+  assert.equal(decide(tick({ price: 67000 }), 0, position(70000), highVol, dd), null);
+  // -5.14% 면 상한 5% 손절 발동 (ATR 1.5배=6% 까지 기다리지 않음)
+  assert.match(decide(tick({ price: 66400 }), 0, position(70000), highVol, dd)?.reason ?? '', /손절/);
 });
 
 const emptyDaily = {

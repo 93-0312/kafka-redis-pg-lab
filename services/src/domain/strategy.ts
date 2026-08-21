@@ -48,6 +48,11 @@ export interface StrategyDef {
   trailPct?: number;
   /** 동적 손절 폭(%). 지정 시 stopLossPct 대신 사용 (예: ATR 기반) */
   dynamicStopPct?: (ctx: MarketCtx) => number;
+  /**
+   * true 면 익절·손절·트레일링 폭을 그날 변동성(ATR)에 비례해 함께 넓힙니다.
+   * 손절만 넓히면 손익비가 무너지므로(12% 걸고 1.5% 먹기) 셋을 같은 배율로 스케일합니다.
+   */
+  volAdaptive?: boolean;
   /** true 면 정규장(KRX 09:00~15:30 / US 09:30~16:00 ET)에서만 신규 진입. 청산은 항상 허용 */
   regularSessionOnly?: boolean;
 }
@@ -66,6 +71,29 @@ const pct = (r: number): string => `${r >= 0 ? '+' : ''}${(r * 100).toFixed(2)}%
  */
 const HIGH_BREAK_MARGIN = 0.001;
 
+/** 단기모멘텀 진입 문턱(1분 상승률)의 기준값. 실제 문턱 = 이 값 × 변동성 배율 */
+const SCALP_BASE_THRESHOLD = 0.003;
+
+/**
+ * 전략 임계값(익절·손절·트레일링·진입 문턱)이 상정한 기준 변동성.
+ * 전부 ATR 3% 안팎의 장을 가정하고 잡힌 숫자입니다.
+ */
+const REF_ATR_PCT = 3;
+
+/**
+ * 변동성 배율. ATR 이 기준(3%)보다 큰 장에서는 고정 폭이 노이즈에 먼저 걸리므로
+ * 그 비율만큼 폭을 넓힙니다. 지표가 없으면 1 (= 기존 동작 그대로).
+ *
+ * 상한 3배는 안전장치입니다 — 상장 첫날처럼 ATR 이 비정상적으로 큰 종목에서
+ * 손절이 -30% 까지 벌어지면 킬 스위치가 먼저 걸립니다.
+ * 하한 1배는 조용한 장에서 폭을 좁히지 않기 위한 것입니다 (좁히면 과매매로 돌아감).
+ */
+const volScale = (ctx: MarketCtx): number => {
+  const atr = ctx.daily?.atrPct;
+  if (atr == null || !Number.isFinite(atr) || atr <= 0) return 1;
+  return Math.min(3, Math.max(1, atr / REF_ATR_PCT));
+};
+
 /** 등락률이 임계값을 "이번 틱에 새로" 하향/상향 돌파했는지 (크로싱) */
 const crossedDown = (prev: number | null, cur: number, threshold: number): boolean =>
   prev !== null && prev > threshold && cur <= threshold;
@@ -76,15 +104,20 @@ export const STRATEGIES: StrategyDef[] = [
   {
     id: 'meanrevert',
     label: '평균회귀',
-    description: '-2% 하향 돌파 + RSI<40 (과매도 확인) · 익절 +1.5%부터 트레일링(-0.8%) / 손절 -1.5% · 정규장 한정',
+    description:
+      '-2% 하향 돌파 + RSI<70 (과열 종목 제외) · 익절 +1.5%부터 트레일링(-0.8%) / 손절 -1.5% · ' +
+      '폭은 ATR 에 비례해 확대 · 정규장 한정',
     regularSessionOnly: true,
     entry: (_t, rate, ctx) =>
-      crossedDown(ctx.prevRate, rate, -0.02) && rsiBelow(ctx, 40)
+      crossedDown(ctx.prevRate, rate, -0.02) && rsiBelow(ctx, 70)
         ? `급락 돌파 매수: ${pct(ctx.prevRate!)} → ${pct(rate)} (-2% 하향 돌파, RSI ${ctx.daily?.rsi14?.toFixed(0) ?? '?'})`
         : null,
     takeProfitPct: 1.5,
     stopLossPct: 1.5,
     trailPct: 0.8,
+    // 실측: 청산 9건 중 8건이 손절이고 그중 -4.6% 까지 밀린 체결이 있었습니다.
+    // ATR 8~10% 장에서 고정 -1.5% 는 진입이 맞든 틀리든 노이즈에 먼저 걸립니다.
+    volAdaptive: true,
   },
   {
     id: 'momentum',
@@ -103,7 +136,7 @@ export const STRATEGIES: StrategyDef[] = [
     id: 'deepdip',
     label: '낙폭과대',
     description:
-      '-4% 하향 돌파 매수, 길게 홀드 · 익절 +3%부터 트레일링(-1.5%) / 손절 max(3%, 1.5×ATR) · ' +
+      '-4% 하향 돌파 매수, 길게 홀드 · 익절 +3%부터 트레일링(-1.5%) / 손절 max(3%, 1.5×ATR) 상한 5% · ' +
       '정규장 한정 (시간외 -4%는 대개 실체 있는 악재)',
     regularSessionOnly: true,
     entry: (_t, rate, ctx) =>
@@ -113,28 +146,35 @@ export const STRATEGIES: StrategyDef[] = [
     takeProfitPct: 3,
     stopLossPct: 3,
     trailPct: 1.5,
-    // -4% 빠진 종목의 일중 변동성이면 고정 -3% 는 노이즈에 터집니다. ATR 로 여유를 줍니다.
+    // -4% 빠진 종목의 일중 변동성이면 고정 -3% 는 노이즈에 터집니다. ATR 로 여유를 주되,
+    // 상한 5% (포지션 10% × 5% = 거래당 최대 손실 자본의 0.5%). 2026-08-21 카카오 -13% 폭락에서
+    // 상한 없는 ATR 손절(6.9%)이 손실을 2배로 키운 사례 반영.
     dynamicStopPct: (ctx) =>
-      ctx.daily?.atrPct != null ? Math.max(3, ctx.daily.atrPct * 1.5) : 3,
+      ctx.daily?.atrPct != null ? Math.min(5, Math.max(3, ctx.daily.atrPct * 1.5)) : 3,
   },
   {
     id: 'scalper',
     label: '단기모멘텀',
     description:
-      '1분 +0.3% 상향 돌파 "순간" 편승 (당일 상승 + MA20 위 + RSI<70 인 종목만) · ' +
-      '익절 +1.5%부터 트레일링(-0.8%) / 손절 -1.5% · 정규장 한정',
+      '1분 +0.3%(ATR 비례 확대) 상향 돌파 "순간" 편승 (당일 상승 + MA20 위 + RSI<70 인 종목만) · ' +
+      '익절 +1.5%부터 트레일링(-0.8%) / 손절 -1.5% · 폭은 ATR 에 비례해 확대 · 정규장 한정',
     regularSessionOnly: true,
-    entry: (t, rate, ctx) =>
-      ctx.shortChange !== null &&
-      crossedUp(ctx.prevShortChange, ctx.shortChange, 0.003) &&
-      rsiBelow(ctx, 70) && // 이미 과열(RSI≥70)인 종목의 고점 추격은 걸러냅니다
-      aboveMa20(ctx, t.price) && // 하락 추세 종목의 1분 반등은 대부분 되밀립니다
-      rate > 0 // 당일 하락 중인 종목의 1분 급등은 되돌림일 뿐입니다
-        ? `급등 편승: 1분 내 ${pct(ctx.shortChange)} (+0.3% 상향 돌파, MA20 위)`
-        : null,
+    entry: (t, rate, ctx) => {
+      // 실측: 이틀에 87회 진입했고 손실의 약 70% 가 거래비용이었습니다.
+      // ATR 8% 종목에서 "1분 +0.3%" 는 신호가 아니라 노이즈라 계속 긁힙니다.
+      const threshold = SCALP_BASE_THRESHOLD * volScale(ctx);
+      return ctx.shortChange !== null &&
+        crossedUp(ctx.prevShortChange, ctx.shortChange, threshold) &&
+        rsiBelow(ctx, 70) && // 이미 과열(RSI≥70)인 종목의 고점 추격은 걸러냅니다
+        aboveMa20(ctx, t.price) && // 하락 추세 종목의 1분 반등은 대부분 되밀립니다
+        rate > 0 // 당일 하락 중인 종목의 1분 급등은 되돌림일 뿐입니다
+        ? `급등 편승: 1분 내 ${pct(ctx.shortChange)} (+${(threshold * 100).toFixed(2)}% 상향 돌파, MA20 위)`
+        : null;
+    },
     takeProfitPct: 1.5,
     stopLossPct: 1.5,
     trailPct: 0.8,
+    volAdaptive: true,
   },
   {
     id: 'highbreak',
@@ -184,8 +224,12 @@ export function decide(
 ): Decision | null {
   if (position) {
     const fromAvg = (tick.price - position.avgPrice) / position.avgPrice;
-    const stopPct = def.dynamicStopPct?.(ctx) ?? def.stopLossPct;
-    const tpLine = position.avgPrice * (1 + def.takeProfitPct / 100);
+    // volAdaptive 전략은 익절·손절·트레일링을 같은 배율로 넓혀 손익비를 보존합니다.
+    const scale = def.volAdaptive ? volScale(ctx) : 1;
+    const stopPct = (def.dynamicStopPct?.(ctx) ?? def.stopLossPct) * scale;
+    const takeProfitPct = def.takeProfitPct * scale;
+    const trailPct = def.trailPct != null ? def.trailPct * scale : null;
+    const tpLine = position.avgPrice * (1 + takeProfitPct / 100);
     const peak = Math.max(position.peakPrice ?? tick.price, tick.price);
 
     // 손절이 최우선입니다. 트레일링이 발동된 뒤 갭으로 손절선까지 밀린 경우에도
@@ -197,8 +241,8 @@ export function decide(
     // 트레일링 익절: 보유 중 고점이 한 번이라도 익절선을 넘었다면(=발동) 그 뒤로는
     // 고점을 따라가다가 trailPct 되밀릴 때 청산합니다. 청산선은 익절선 아래로
     // 내려가지 않으므로 고정 익절보다 나쁠 수 없고, 추세가 이어지면 더 먹습니다.
-    if (def.trailPct != null && peak >= tpLine) {
-      const exitLine = Math.max(tpLine, peak * (1 - def.trailPct / 100));
+    if (trailPct != null && peak >= tpLine) {
+      const exitLine = Math.max(tpLine, peak * (1 - trailPct / 100));
       if (tick.price <= exitLine) {
         return {
           side: 'SELL',
@@ -209,8 +253,8 @@ export function decide(
       }
       return null; // 아직 고점 경신 중 — 홀드
     }
-    if (def.trailPct == null && fromAvg >= def.takeProfitPct / 100) {
-      return { side: 'SELL', reason: `익절: 평단 대비 ${pct(fromAvg)} ≥ +${def.takeProfitPct}%` };
+    if (trailPct == null && fromAvg >= takeProfitPct / 100) {
+      return { side: 'SELL', reason: `익절: 평단 대비 ${pct(fromAvg)} ≥ +${takeProfitPct.toFixed(1)}%` };
     }
     return null;
   }
