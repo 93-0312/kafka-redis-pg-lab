@@ -70,8 +70,19 @@ function DailyPnl({ rows }: { rows: PaperDailyRow[] }) {
       </thead>
       <tbody>
         {rows.map((r) => {
+          // 그 구간에 체결이 한 건도 없으면 "거래 없음" — 0원 손익과 휴면을 구분합니다.
+          const idle = r.tradeCount === 0 && r.dailyPnl === 0;
           const d = upDown(r.dailyPnl);
           const w = Math.round((Math.abs(r.dailyPnl) / maxAbs) * 100);
+          if (idle) {
+            return (
+              <tr key={r.date} style={{ opacity: 0.5 }}>
+                <td>{label(r.date)}</td>
+                <td colSpan={3} style={{ color: '#8b94a7', fontStyle: 'italic' }}>거래 없음</td>
+                <td>{krw(r.equity)}</td>
+              </tr>
+            );
+          }
           return (
             <tr key={r.date} style={r.date === 'live' ? { opacity: 0.85 } : undefined}>
               <td>{label(r.date)}</td>

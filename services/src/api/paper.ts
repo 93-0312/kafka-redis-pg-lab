@@ -127,6 +127,8 @@ export interface PaperDailyRow {
   /** 직전 스냅샷 대비 손익 (첫 행은 초기 자금 대비) */
   dailyPnl: number;
   dailyRate: number;
+  /** 이 구간에 실제 체결된 건수. 0이면 "거래 없음"으로 표시 (0원 손익과 구분) */
+  tradeCount: number;
 }
 
 /**
@@ -139,16 +141,36 @@ export async function readPaperDaily(
   pool: { query: (sql: string) => Promise<{ rows: Record<string, unknown>[] }> },
 ): Promise<PaperDailyRow[]> {
   const res = await pool.query(
-    `SELECT snapshot_date::text AS date, strategy_id, equity::float8 AS equity
+    `SELECT snapshot_date::text AS date, strategy_id, equity::float8 AS equity,
+            extract(epoch from created_at) * 1000 AS created_ms
      FROM paper_equity_daily ORDER BY snapshot_date ASC`,
   );
 
+  // 전략별 체결 시각(ms) 목록 — 각 구간의 실제 체결 수를 세기 위함.
+  // "0원 손익"과 "매매 자체가 없던 날(휴면)"을 구분하려면 손익이 아니라 체결 수를 봐야 합니다.
+  const fillsBySid = new Map<string, number[]>();
+  for (const sid of new Set(res.rows.map((r) => String(r['strategy_id'])))) {
+    const raw = await redis.lrange(K.paperTrades(sid), 0, -1);
+    fillsBySid.set(
+      sid,
+      raw
+        .map((s) => JSON.parse(s) as PaperTradeRecord)
+        .filter((t) => t.status === 'FILLED')
+        .map((t) => Date.parse(t.filledAt))
+        .filter((ms) => Number.isFinite(ms)),
+    );
+  }
+  const countFills = (sid: string, from: number, to: number): number =>
+    (fillsBySid.get(sid) ?? []).filter((ms) => ms > from && ms <= to).length;
+
   const out: PaperDailyRow[] = [];
   const prevEquity = new Map<string, number>();
+  const prevMs = new Map<string, number>();
 
   for (const r of res.rows) {
     const sid = String(r['strategy_id']);
     const equity = Number(r['equity']);
+    const createdMs = Number(r['created_ms']);
     // 첫 스냅샷의 기준은 해당 전략 계좌의 초기 자금
     const base =
       prevEquity.get(sid) ??
@@ -159,12 +181,15 @@ export async function readPaperDaily(
       equity,
       dailyPnl: equity - base,
       dailyRate: base > 0 ? (equity - base) / base : 0,
+      tradeCount: countFills(sid, prevMs.get(sid) ?? 0, createdMs),
     });
     prevEquity.set(sid, equity);
+    prevMs.set(sid, createdMs);
   }
 
   // 진행분: 현재 자산 vs 마지막 스냅샷
   const current = await readPaper(redis);
+  const now = Date.now();
   for (const s of current.strategies) {
     const base = prevEquity.get(s.strategyId) ?? s.totals.initialCash;
     out.push({
@@ -173,6 +198,7 @@ export async function readPaperDaily(
       equity: s.totals.equity,
       dailyPnl: s.totals.equity - base,
       dailyRate: base > 0 ? (s.totals.equity - base) / base : 0,
+      tradeCount: countFills(s.strategyId, prevMs.get(s.strategyId) ?? 0, now),
     });
   }
   return out;

@@ -146,6 +146,7 @@ export interface PaperDailyRow {
   equity: number;
   dailyPnl: number;
   dailyRate: number;
+  tradeCount: number;
 }
 
 export interface PriceAlert {
