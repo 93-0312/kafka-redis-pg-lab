@@ -28,6 +28,9 @@ for _ in $(seq 1 30); do
   sleep 2
 done
 
+# 기존 백엔드 워커 정리 (중복 스택 = Kafka 유령 멤버 → CPU 폭주 방지)
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/kill-stack.ps1 2>/dev/null || true
+
 ( cd services && npm run setup )
 
 PIDS=()

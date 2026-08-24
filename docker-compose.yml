@@ -30,6 +30,8 @@ services:
       # 학습 중 토픽을 자주 지웠다 만들 것이므로 자동 생성을 켭니다.
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
       KAFKA_LOG_RETENTION_HOURS: 168
+      # heap 상향: 기본값은 유령 멤버 누적·30일 보존 데이터에 OOM. 2026-08-22 CPU 폭주 대응
+      KAFKA_HEAP_OPTS: "-Xmx2G -Xms2G"
     healthcheck:
       test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 || exit 1"]
       interval: 10s

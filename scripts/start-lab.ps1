@@ -57,7 +57,9 @@ Set-Location (Join-Path $Root 'services')
 cmd /c "npm run setup" 2>&1 | Out-Null
 Write-Log "토픽 확인 완료"
 
-# 5) 백엔드(6 프로세스) + 웹, 숨김 창으로. 로그는 logs\backend.log / logs\web.log
+# 5) 기존 워커 정리 후 백엔드 + 웹 시작 (중복 스택 = Kafka CPU 폭주 방지)
+& (Join-Path $PSScriptRoot "kill-stack.ps1")
+
 Start-Process cmd -WorkingDirectory (Join-Path $Root 'services') `
   -ArgumentList "/c npm run dev >> `"$LogDir\backend.log`" 2>&1" -WindowStyle Hidden
 Start-Process cmd -WorkingDirectory (Join-Path $Root 'web') `
