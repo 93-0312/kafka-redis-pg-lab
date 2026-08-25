@@ -57,14 +57,17 @@ async function refreshIndicators(
   redis: ReturnType<typeof createRedis>,
 ): Promise<void> {
   const bySymbol = new Map<string, DailyCandle[]>();
+  // 종목당 1콜 순차 호출. 종목이 많으면(38+) 초당 10회 한도를 순간적으로 넘겨 429 가
+  // 나므로, 각 호출 사이에 125ms(초당 ~8회) 간격을 둡니다. 시세 폴링은 배치(1콜)라 무관.
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
   for (const symbol of symbols) {
     try {
-      // 종목당 1콜 순차 호출 — rate limit(초당 ~10회) 안에서 여유
       const candles = await fetchDailyCandles(symbol, 80);
       bySymbol.set(symbol, candles.map(toDailyCandle));
     } catch (err) {
       console.warn(`[strategy] ${symbol} 일봉 조회 실패:`, (err as Error).message);
     }
+    await sleep(125);
   }
   if (bySymbol.size === 0) return;
   indicatorStore = new AsOfIndicatorStore(bySymbol, dateKey);
