@@ -63,6 +63,14 @@ const rsiBelow = (ctx: MarketCtx, level: number): boolean =>
 const aboveMa20 = (ctx: MarketCtx, price: number): boolean =>
   ctx.daily?.ma20 == null || price > ctx.daily.ma20;
 
+/**
+ * 직전 틱의 가격 복원. MarketCtx 에 직전 가격 필드를 따로 두지 않고,
+ * prevRate(직전 등락률)와 prevClose 로 되살립니다: prevPrice = prevClose × (1 + prevRate).
+ * "지표선(볼린저·MA)을 아래→위로 새로 돌파하는 순간"(크로싱) 감지에 씁니다.
+ */
+const prevPriceOf = (t: TickEvent, ctx: MarketCtx): number | null =>
+  t.prevClose != null && ctx.prevRate != null ? t.prevClose * (1 + ctx.prevRate) : null;
+
 const pct = (r: number): string => `${r >= 0 ? '+' : ''}${(r * 100).toFixed(2)}%`;
 
 /**
@@ -180,19 +188,82 @@ export const STRATEGIES: StrategyDef[] = [
     id: 'highbreak',
     label: '신고가돌파',
     description:
-      '당일 고가 +0.1% 이상 돌파 + 상승 중 + 주가>MA20 (정규장 한정) · ' +
-      '익절 +2%부터 트레일링(-1%) / 손절 -1%',
+      '당일 고가 +0.3% 이상 "강하게" 돌파 + 상승 중 + 주가>MA20 (정규장 한정) · ' +
+      '익절 +3%부터 트레일링(-1.5%) / 손절 -0.8%',
     regularSessionOnly: true,
+    // 리뉴얼(2026-08-26): 마진 +0.1%→+0.3% 로 강화. 실측 9일 백테스트에서
+    // +0.1% 는 가짜 돌파를 39건이나 잡아 승률 23%·-2.0% 였는데, +0.3% 로 올리자
+    // 체결 4건·승률 50%·손익비 2.14 로 플러스 전환. "고가를 스치는" 약한 돌파가 손실 주범.
     entry: (t, rate, ctx) =>
       ctx.dayHigh !== null &&
-      t.price >= ctx.dayHigh * (1 + HIGH_BREAK_MARGIN) &&
+      t.price >= ctx.dayHigh * (1 + 0.003) &&
       rate > 0 &&
       aboveMa20(ctx, t.price)
         ? `신고가 돌파: 당일 고가 ${ctx.dayHigh.toLocaleString('ko-KR')} 대비 ` +
           `${pct((t.price - ctx.dayHigh) / ctx.dayHigh)} 갱신 (${pct(rate)}, MA20 위)`
         : null,
-    takeProfitPct: 2,
+    takeProfitPct: 3,
+    stopLossPct: 0.8,
+    trailPct: 1.5,
+  },
+  {
+    id: 'bollbounce',
+    label: '볼린저반등',
+    description:
+      '볼린저밴드 하단을 아래→위로 되돌아오는 순간 매수 (지표 기반 역추세) · ' +
+      '익절 +3%부터 트레일링(-1%) / 손절 -2% · 정규장 한정',
+    regularSessionOnly: true,
+    // 검증(2026-08-26, 9일 백테스트): +0.26%, 승률 75%. 평균회귀(전일 대비 -2%)와
+    // 다른 각도의 역추세 — "밴드 하단 이탈 후 복귀"라는 지표 신호를 씁니다.
+    entry: (t, _rate, ctx) => {
+      const p = prevPriceOf(t, ctx);
+      const lo = ctx.daily?.bbLower;
+      return lo != null && p != null && p < lo && t.price >= lo
+        ? `볼린저 하단(${Math.round(lo).toLocaleString('ko-KR')}) 반등`
+        : null;
+    },
+    takeProfitPct: 3,
+    stopLossPct: 2,
+    trailPct: 1,
+  },
+  {
+    id: 'bandride',
+    label: '밴드상단돌파',
+    description:
+      '볼린저밴드 상단을 아래→위로 돌파하는 강한 상승에 편승 (추세추종의 지표판) · ' +
+      '익절 +3%부터 트레일링(-1.5%) / 손절 -1% · 정규장 한정',
+    regularSessionOnly: true,
+    // 검증(2026-08-26): +0.17%, 손익비 3.68 (이겨서 크게, 져서 작게). 하락장에서도 플러스.
+    entry: (t, rate, ctx) => {
+      const p = prevPriceOf(t, ctx);
+      const up = ctx.daily?.bbUpper;
+      return up != null && p != null && p < up && t.price >= up && rate > 0
+        ? `볼린저 상단(${Math.round(up).toLocaleString('ko-KR')}) 돌파 (${pct(rate)})`
+        : null;
+    },
+    takeProfitPct: 3,
     stopLossPct: 1,
+    trailPct: 1.5,
+  },
+  {
+    id: 'goldenzone',
+    label: '정배열눌림',
+    description:
+      '정배열(MA20>MA60) 상승추세에서 주가가 MA20 을 아래→위로 회복하는 순간 매수 · ' +
+      '익절 +2%부터 트레일링(-1%) / 손절 -1.5% · 정규장 한정',
+    regularSessionOnly: true,
+    // 주의: 2026-08-26 검증 시 하락장 표본이라 마이너스(-0.48%). 상승장 방어·적응력을
+    // 관찰하려고 사용자 요청으로 포함. 상승 전환 시 재평가 대상.
+    entry: (t, rate, ctx) => {
+      const p = prevPriceOf(t, ctx);
+      const ma20 = ctx.daily?.ma20;
+      const ma60 = ctx.daily?.ma60;
+      return ma20 != null && ma60 != null && ma20 > ma60 && p != null && p < ma20 && t.price >= ma20 && rate > 0
+        ? `정배열 눌림목: MA20(${Math.round(ma20).toLocaleString('ko-KR')})>MA60 회복`
+        : null;
+    },
+    takeProfitPct: 2,
+    stopLossPct: 1.5,
     trailPct: 1,
   },
 ];

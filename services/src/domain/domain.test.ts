@@ -152,10 +152,10 @@ const position = (avgPrice: number, peakPrice?: number): PaperPosition => ({
   quantity: 10, avgPrice, openedAt: '2026-08-18T10:00:00+09:00', peakPrice,
 });
 
-test('전략 5개가 등록되어 있다', () => {
+test('전략 8개가 등록되어 있다', () => {
   assert.deepEqual(
     STRATEGIES.map((s) => s.id),
-    ['meanrevert', 'momentum', 'deepdip', 'scalper', 'highbreak'],
+    ['meanrevert', 'momentum', 'deepdip', 'scalper', 'highbreak', 'bollbounce', 'bandride', 'goldenzone'],
   );
 });
 
@@ -205,12 +205,15 @@ test('scalper: 1분 변화율이 +0.3% 를 상향 돌파하는 순간에만 매�
   assert.equal(decide(tick(), 0.01, null, CTX, def), null); // 기준가 없으면 관망
 });
 
-test('highbreak: 당일 고가 갱신 + 상승 중일 때만 매수', () => {
+test('highbreak: 당일 고가를 +0.3% 이상 "강하게" 돌파 + 상승 중일 때만 매수', () => {
   const def = byId('highbreak');
-  assert.equal(decide(tick({ price: 74000 }), 0.01, null, { ...CTX, dayHigh: 73900 }, def)?.side, 'BUY');
+  // 73,900 × 1.003 = 74,117. 74,200 은 +0.41% → 진입
+  assert.equal(decide(tick({ price: 74200 }), 0.01, null, { ...CTX, dayHigh: 73900 }, def)?.side, 'BUY');
+  // 74,000 은 +0.14% → 마진 미달, 진입 안 함
+  assert.equal(decide(tick({ price: 74000 }), 0.01, null, { ...CTX, dayHigh: 73900 }, def), null);
   assert.equal(decide(tick({ price: 73000 }), 0.01, null, { ...CTX, dayHigh: 73900 }, def), null);
-  assert.equal(decide(tick({ price: 74000 }), -0.01, null, { ...CTX, dayHigh: 73900 }, def), null);
-  assert.equal(decide(tick({ price: 74000 }), 0.01, null, CTX, def), null); // 첫 틱은 관망
+  assert.equal(decide(tick({ price: 74200 }), -0.01, null, { ...CTX, dayHigh: 73900 }, def), null); // 하락 중
+  assert.equal(decide(tick({ price: 74200 }), 0.01, null, CTX, def), null); // dayHigh 없으면 관망
 });
 
 test('decide: 포지션이 있으면 익절/손절만 검토', () => {
@@ -393,23 +396,27 @@ const emptyDaily = {
   ma20: null, ma60: null, rsi14: null, bbUpper: null, bbLower: null, atrPct: null, lastClose: null,
 };
 
-test('highbreak: 비대칭 청산 (+2% 익절선부터 트레일링 / -1% 손절)', () => {
+test('highbreak: 비대칭 청산 (+3% 익절선부터 트레일링(-1.5%) / -0.8% 손절)', () => {
   const def = byId('highbreak');
-  assert.equal(decide(tick({ price: 71100 }), 0, position(70000), CTX, def), null); // +1.57% 아직 홀드
-  // 익절선(+2% = 71,400) 통과 후엔 고점 대비 -1% 되밀릴 때까지 홀드
-  assert.equal(decide(tick({ price: 71500 }), 0, position(70000, 71500), CTX, def), null);
+  assert.equal(decide(tick({ price: 72000 }), 0, position(70000), CTX, def), null); // +2.86% 아직 익절선 전
+  // 고점 73,000(+4.3%)까지 갔다가 되밀릴 때: 청산선 = max(익절선 72,100, 고점×0.985=71,905) = 72,100.
+  // 72,500 은 청산선 위 → 홀드
+  assert.equal(decide(tick({ price: 72500 }), 0, position(70000, 73000), CTX, def), null);
+  // 72,000 은 청산선(72,100) 아래 → 트레일링 익절
   assert.match(
-    decide(tick({ price: 71_390 }), 0, position(70000, 71500), CTX, def)?.reason ?? '',
+    decide(tick({ price: 72_000 }), 0, position(70000, 73000), CTX, def)?.reason ?? '',
     /트레일링 익절/,
   );
-  assert.match(decide(tick({ price: 69200 }), 0, position(70000), CTX, def)?.reason ?? '', /손절/);
+  // -0.8% 손절: 70,000 × 0.992 = 69,440 이하
+  assert.match(decide(tick({ price: 69400 }), 0, position(70000), CTX, def)?.reason ?? '', /손절/);
+  assert.equal(decide(tick({ price: 69500 }), 0, position(70000), CTX, def), null); // -0.71% 아직 홀드
 });
 
-test('highbreak: 고가를 "스치는" 돌파(마진 0.1% 미만)는 진입하지 않는다', () => {
+test('highbreak: 고가를 "스치는" 약한 돌파(마진 0.3% 미만)는 진입하지 않는다', () => {
   const def = byId('highbreak');
   const ctx = { ...CTX, dayHigh: 73_900 };
-  assert.equal(decide(tick({ price: 73_910 }), 0.01, null, ctx, def), null); // +0.01% — 노이즈
-  assert.equal(decide(tick({ price: 74_000 }), 0.01, null, ctx, def)?.side, 'BUY'); // +0.14%
+  assert.equal(decide(tick({ price: 74_000 }), 0.01, null, ctx, def), null); // +0.14% — 노이즈
+  assert.equal(decide(tick({ price: 74_200 }), 0.01, null, ctx, def)?.side, 'BUY'); // +0.41% — 강한 돌파
 });
 
 test('positionSize: 현금 비중으로 정수 수량, 1주 미만이면 0', () => {
@@ -446,8 +453,8 @@ test('모든 전략이 정규장 전용이다 (시간외 진입 품질 문제는
 
 test('highbreak: 정규장 밖에서는 신고가 갱신에도 진입하지 않는다', () => {
   const def = byId('highbreak');
-  const inSession = tick({ price: 74000, tradedAt: '2026-08-18T10:00:00+09:00' });
-  const offSession = tick({ price: 74000, tradedAt: '2026-08-18T17:00:00+09:00' }); // NXT 시간외
+  const inSession = tick({ price: 74200, tradedAt: '2026-08-18T10:00:00+09:00' });
+  const offSession = tick({ price: 74200, tradedAt: '2026-08-18T17:00:00+09:00' }); // NXT 시간외
   const ctx = { ...CTX, dayHigh: 73900 };
   assert.equal(decide(inSession, 0.01, null, ctx, def)?.side, 'BUY');
   assert.equal(decide(offSession, 0.01, null, ctx, def), null);
