@@ -110,7 +110,7 @@ test('engine: 시간 청산 — 익절/손절 미도달 좀비 포지션 강제 
   const ticks = [
     tick(0, 100_000),
     tick(3, 97_000),                 // -3% 돌파 — 진입
-    tick(60 * 60 * 7, 97_500),       // 7시간 뒤에도 ±1.5% 안 — maxHoldMin(360분) 초과 → 강제 청산
+    tick(60 * 60 * 25, 97_500),      // 25시간 뒤에도 ±1.5% 안 — meanrevert maxHoldMin(1440분=24h) 초과 → 강제 청산
   ];
   const [r] = runBacktest(ticks, meanrevert, CFG);
   assert.ok(r);

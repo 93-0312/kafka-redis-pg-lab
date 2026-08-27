@@ -258,8 +258,9 @@ async function main(): Promise<void> {
         let decision = decide(tick, rate, position, ctx, def);
         if (!decision && position) {
           const heldMin = (Date.now() - Date.parse(position.openedAt)) / 60_000;
-          if (heldMin >= config.paper.maxHoldMin) {
-            decision = { side: 'SELL', reason: `시간 청산: 보유 ${Math.round(heldMin)}분 ≥ ${config.paper.maxHoldMin}분` };
+          const holdLimit = def.maxHoldMin ?? config.paper.maxHoldMin;
+          if (heldMin >= holdLimit) {
+            decision = { side: 'SELL', reason: `시간 청산: 보유 ${Math.round(heldMin)}분 ≥ ${holdLimit}분` };
           }
         }
         if (!decision) continue;

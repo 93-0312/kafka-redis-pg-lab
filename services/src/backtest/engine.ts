@@ -174,8 +174,9 @@ export function runBacktest(
       let decision = decide(tick, rate, position, ctx, def);
       if (!decision && position) {
         const heldMin = (now - Date.parse(position.openedAt)) / 60_000;
-        if (heldMin >= cfg.maxHoldMin) {
-          decision = { side: 'SELL', reason: `시간 청산: 보유 ${Math.round(heldMin)}분 ≥ ${cfg.maxHoldMin}분` };
+        const holdLimit = def.maxHoldMin ?? cfg.maxHoldMin;
+        if (heldMin >= holdLimit) {
+          decision = { side: 'SELL', reason: `시간 청산: 보유 ${Math.round(heldMin)}분 ≥ ${holdLimit}분` };
         }
       }
 

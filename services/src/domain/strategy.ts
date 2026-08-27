@@ -53,6 +53,13 @@ export interface StrategyDef {
    * 손절만 넓히면 손익비가 무너지므로(12% 걸고 1.5% 먹기) 셋을 같은 배율로 스케일합니다.
    */
   volAdaptive?: boolean;
+  /**
+   * 시간 청산 상한(분). 익절·손절·트레일링 어디에도 닿지 않은 "좀비 포지션"을
+   * 이 시간 넘기면 강제 청산합니다. 지정 안 하면 공통값(config.paper.maxHoldMin).
+   * ★ 손절/익절/트레일링은 시간과 무관하게 항상 먼저 작동합니다 — 이건 최후의 안전망일 뿐.
+   * 전략 성격에 맞춰: 초단타는 짧게, 흐름·홀드형은 길게 둡니다.
+   */
+  maxHoldMin?: number;
   /** true 면 정규장(KRX 09:00~15:30 / US 09:30~16:00 ET)에서만 신규 진입. 청산은 항상 허용 */
   regularSessionOnly?: boolean;
 }
@@ -116,6 +123,7 @@ export const STRATEGIES: StrategyDef[] = [
       '-2% 하향 돌파 + RSI<70 (과열 종목 제외) · 익절 +1.5%부터 트레일링(-0.8%) / 손절 -1.5% · ' +
       '폭은 ATR 에 비례해 확대 · 정규장 한정',
     regularSessionOnly: true,
+    maxHoldMin: 1440, // 역추세: 반등은 보통 하루 안에
     entry: (_t, rate, ctx) =>
       crossedDown(ctx.prevRate, rate, -0.02) && rsiBelow(ctx, 70)
         ? `급락 돌파 매수: ${pct(ctx.prevRate!)} → ${pct(rate)} (-2% 하향 돌파, RSI ${ctx.daily?.rsi14?.toFixed(0) ?? '?'})`
@@ -132,6 +140,7 @@ export const STRATEGIES: StrategyDef[] = [
     label: '추세추종',
     description: '+2% 상향 돌파 + 주가>MA20 (추세 확인) · 익절 +1.5%부터 트레일링(-0.8%) / 손절 -1.5% · 정규장 한정',
     regularSessionOnly: true,
+    maxHoldMin: 2880, // 흐름 편승: 추세 지속 존중, 2일
     entry: (t, rate, ctx) =>
       crossedUp(ctx.prevRate, rate, 0.02) && aboveMa20(ctx, t.price)
         ? `돌파 매수: ${pct(ctx.prevRate!)} → ${pct(rate)} (+2% 상향 돌파, MA20 위)`
@@ -147,6 +156,7 @@ export const STRATEGIES: StrategyDef[] = [
       '-4% 하향 돌파 매수, 길게 홀드 · 익절 +3%부터 트레일링(-1.5%) / 손절 max(3%, 1.5×ATR) 상한 5% · ' +
       '정규장 한정 (시간외 -4%는 대개 실체 있는 악재)',
     regularSessionOnly: true,
+    maxHoldMin: 360, // 백테스트: 6h(+0.45%)가 최선. 하락장에선 6h 좀비청산이 핵심 방어 (1일+는 -0.8%대)
     entry: (_t, rate, ctx) =>
       crossedDown(ctx.prevRate, rate, -0.04)
         ? `낙폭과대 돌파 매수: ${pct(ctx.prevRate!)} → ${pct(rate)} (-4% 하향 돌파)`
@@ -167,6 +177,7 @@ export const STRATEGIES: StrategyDef[] = [
       '1분 +0.3%(ATR 비례 확대) 상향 돌파 "순간" 편승 (당일 상승 + MA20 위 + RSI<70 인 종목만) · ' +
       '익절 +1.5%부터 트레일링(-0.8%) / 손절 -1.5% · 폭은 ATR 에 비례해 확대 · 정규장 한정',
     regularSessionOnly: true,
+    maxHoldMin: 120, // 초단타: 빨리 결판, 2시간
     entry: (t, rate, ctx) => {
       // 실측: 이틀에 87회 진입했고 손실의 약 70% 가 거래비용이었습니다.
       // ATR 8% 종목에서 "1분 +0.3%" 는 신호가 아니라 노이즈라 계속 긁힙니다.
@@ -191,6 +202,7 @@ export const STRATEGIES: StrategyDef[] = [
       '당일 고가 +0.3% 이상 "강하게" 돌파 + 상승 중 + 주가>MA20 (정규장 한정) · ' +
       '익절 +3%부터 트레일링(-1.5%) / 손절 -0.8%',
     regularSessionOnly: true,
+    maxHoldMin: 2880, // 흐름 편승: 2일
     // 리뉴얼(2026-08-26): 마진 +0.1%→+0.3% 로 강화. 실측 9일 백테스트에서
     // +0.1% 는 가짜 돌파를 39건이나 잡아 승률 23%·-2.0% 였는데, +0.3% 로 올리자
     // 체결 4건·승률 50%·손익비 2.14 로 플러스 전환. "고가를 스치는" 약한 돌파가 손실 주범.
@@ -213,6 +225,7 @@ export const STRATEGIES: StrategyDef[] = [
       '볼린저밴드 하단을 아래→위로 되돌아오는 순간 매수 (지표 기반 역추세) · ' +
       '익절 +3%부터 트레일링(-1%) / 손절 -2% · 정규장 한정',
     regularSessionOnly: true,
+    maxHoldMin: 1440, // 역추세: 1일
     // 검증(2026-08-26, 9일 백테스트): +0.26%, 승률 75%. 평균회귀(전일 대비 -2%)와
     // 다른 각도의 역추세 — "밴드 하단 이탈 후 복귀"라는 지표 신호를 씁니다.
     entry: (t, _rate, ctx) => {
@@ -233,6 +246,7 @@ export const STRATEGIES: StrategyDef[] = [
       '볼린저밴드 상단을 아래→위로 돌파하는 강한 상승에 편승 (추세추종의 지표판) · ' +
       '익절 +3%부터 트레일링(-1.5%) / 손절 -1% · 정규장 한정',
     regularSessionOnly: true,
+    maxHoldMin: 2880, // 흐름 편승: 2일
     // 검증(2026-08-26): +0.17%, 손익비 3.68 (이겨서 크게, 져서 작게). 하락장에서도 플러스.
     entry: (t, rate, ctx) => {
       const p = prevPriceOf(t, ctx);
@@ -252,6 +266,7 @@ export const STRATEGIES: StrategyDef[] = [
       '정배열(MA20>MA60) 상승추세에서 주가가 MA20 을 아래→위로 회복하는 순간 매수 · ' +
       '익절 +2%부터 트레일링(-1%) / 손절 -1.5% · 정규장 한정',
     regularSessionOnly: true,
+    maxHoldMin: 10080, // 추세 홀드형: 1주일
     // 주의: 2026-08-26 검증 시 하락장 표본이라 마이너스(-0.48%). 상승장 방어·적응력을
     // 관찰하려고 사용자 요청으로 포함. 상승 전환 시 재평가 대상.
     entry: (t, rate, ctx) => {
