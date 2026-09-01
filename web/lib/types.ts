@@ -115,6 +115,12 @@ export interface PaperTradeRecord {
   filledAt: string;
 }
 
+export interface PaperTradesPage {
+  trades: PaperTradeRecord[];
+  total: number;
+  offset: number;
+}
+
 export interface PaperStrategySummary {
   strategyId: string;
   label: string;

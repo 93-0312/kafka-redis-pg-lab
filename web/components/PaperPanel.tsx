@@ -2,7 +2,12 @@
 
 import { useEffect, useState } from 'react';
 import { money, signPct, stamp, upDown } from '@/lib/format';
-import type { PaperDailyRow, PaperSummary, PaperStrategySummary } from '@/lib/types';
+import type {
+  PaperDailyRow,
+  PaperSummary,
+  PaperStrategySummary,
+  PaperTradesPage,
+} from '@/lib/types';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? 'http://localhost:4000';
 const REFRESH_MS = 5_000;
@@ -104,6 +109,116 @@ function DailyPnl({ rows }: { rows: PaperDailyRow[] }) {
         })}
       </tbody>
     </table>
+  );
+}
+
+const TRADE_PAGE = 20;
+
+/**
+ * 체결 내역 피드. 요약(/api/paper)과 별도로 /api/paper/trades 를 폴링합니다.
+ * - 거부(REJECTED) 건은 기본 숨김, "거부 포함" 토글로 표시
+ * - "더 보기"로 과거 내역까지 (저장 상한 500건)
+ */
+function TradeFeed({ strategyId }: { strategyId: string }) {
+  const [page, setPage] = useState<PaperTradesPage | null>(null);
+  const [showRejected, setShowRejected] = useState(false);
+  const [limit, setLimit] = useState(TRADE_PAGE);
+
+  // 전략을 바꾸면 다시 최신부터
+  useEffect(() => setLimit(TRADE_PAGE), [strategyId]);
+
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const q = new URLSearchParams({
+          strategy: strategyId,
+          limit: String(limit),
+          rejected: showRejected ? '1' : '0',
+        });
+        const res = await fetch(`${API_BASE}/api/paper/trades?${q.toString()}`);
+        if (res.ok && alive) setPage((await res.json()) as PaperTradesPage);
+      } catch {
+        /* 요약 카드가 이미 연결 에러를 표시하므로 여기선 조용히 무시 */
+      }
+    };
+    void load();
+    const timer = setInterval(() => void load(), REFRESH_MS);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, [strategyId, showRejected, limit]);
+
+  const trades = page?.trades ?? [];
+  const total = page?.total ?? 0;
+
+  return (
+    <section className="card">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 }}>
+        <p className="panel-title">체결 내역</p>
+        <label style={{ fontSize: 12, color: '#8b94a7', cursor: 'pointer', userSelect: 'none' }}>
+          <input
+            type="checkbox"
+            checked={showRejected}
+            onChange={(e) => {
+              setLimit(TRADE_PAGE);
+              setShowRejected(e.target.checked);
+            }}
+            style={{ marginRight: 4, verticalAlign: 'middle' }}
+          />
+          거부 포함
+        </label>
+      </div>
+      <p className="panel-desc">전략의 판단 근거(reason)가 함께 기록됩니다 · 총 {total}건</p>
+      {trades.length === 0 ? (
+        <div className="empty">{showRejected ? '아직 체결이 없습니다.' : '체결 내역이 없습니다.'}</div>
+      ) : (
+        <>
+          <div className="feed">
+            {trades.map((tr) => (
+              <div
+                key={tr.tradeId}
+                className={`alert ${tr.status === 'REJECTED' ? 'WARN' : tr.side === 'BUY' ? 'INFO' : 'CRITICAL'}`}
+              >
+                <div className="head">
+                  <span className="type">
+                    {tr.status === 'REJECTED' ? '거부' : tr.side === 'BUY' ? '매수' : '매도'}
+                  </span>
+                  <span>{stamp(tr.filledAt)}</span>
+                </div>
+                <div className="msg">
+                  {tr.name} {tr.quantity.toLocaleString('ko-KR')}주 @ {money(tr.price, tr.currency ?? 'KRW')}
+                  {tr.realizedPnl !== undefined && (
+                    <span style={{ color: COLOR[upDown(tr.realizedPnl)], marginLeft: 6 }}>
+                      ({signKrw(tr.realizedPnl)})
+                    </span>
+                  )}
+                  {tr.rejectReason && <span style={{ marginLeft: 6 }}>— {tr.rejectReason}</span>}
+                </div>
+                <div className="who">{tr.reason}</div>
+              </div>
+            ))}
+          </div>
+          {trades.length < total && (
+            <button
+              onClick={() => setLimit((v) => v + TRADE_PAGE)}
+              className="card"
+              style={{
+                cursor: 'pointer',
+                width: '100%',
+                marginTop: 8,
+                textAlign: 'center',
+                fontFamily: 'inherit',
+                color: '#8b94a7',
+              }}
+            >
+              더 보기 ({trades.length}/{total})
+            </button>
+          )}
+        </>
+      )}
+    </section>
   );
 }
 
@@ -247,39 +362,7 @@ export function PaperPanel() {
           )}
         </section>
 
-        <section className="card">
-          <p className="panel-title">체결 내역</p>
-          <p className="panel-desc">전략의 판단 근거(reason)가 함께 기록됩니다</p>
-          {cur.trades.length === 0 ? (
-            <div className="empty">아직 체결이 없습니다.</div>
-          ) : (
-            <div className="feed">
-              {cur.trades.map((tr) => (
-                <div
-                  key={tr.tradeId}
-                  className={`alert ${tr.status === 'REJECTED' ? 'WARN' : tr.side === 'BUY' ? 'INFO' : 'CRITICAL'}`}
-                >
-                  <div className="head">
-                    <span className="type">
-                      {tr.status === 'REJECTED' ? '거부' : tr.side === 'BUY' ? '매수' : '매도'}
-                    </span>
-                    <span>{stamp(tr.filledAt)}</span>
-                  </div>
-                  <div className="msg">
-                    {tr.name} {tr.quantity.toLocaleString('ko-KR')}주 @ {money(tr.price, tr.currency ?? 'KRW')}
-                    {tr.realizedPnl !== undefined && (
-                      <span style={{ color: COLOR[upDown(tr.realizedPnl)], marginLeft: 6 }}>
-                        ({signKrw(tr.realizedPnl)})
-                      </span>
-                    )}
-                    {tr.rejectReason && <span style={{ marginLeft: 6 }}>— {tr.rejectReason}</span>}
-                  </div>
-                  <div className="who">{tr.reason}</div>
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
+        <TradeFeed strategyId={cur.strategyId} />
       </div>
 
       <p className="panel-desc" style={{ marginTop: 10 }}>

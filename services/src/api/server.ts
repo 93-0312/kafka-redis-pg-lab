@@ -6,7 +6,7 @@ import { checkHeartbeats, checkProgress, startHeartbeat } from '../lib/heartbeat
 import { K } from '../lib/keys.js';
 import { createRedis } from '../lib/redis.js';
 import { createPool } from '../lib/pg.js';
-import { readPaper, readPaperDaily } from './paper.js';
+import { readPaper, readPaperDaily, readPaperTrades } from './paper.js';
 import { readPortfolio } from './portfolio.js';
 import { readSummary } from './summary.js';
 
@@ -77,6 +77,26 @@ app.get('/api/paper', async (_req: Request, res: Response) => {
     return;
   }
   res.json(summary);
+});
+
+app.get('/api/paper/trades', async (req: Request, res: Response) => {
+  const strategy = String(req.query['strategy'] ?? '');
+  if (!strategy) {
+    res.status(400).json({ error: 'strategy 파라미터가 필요합니다.' });
+    return;
+  }
+  const rejected = req.query['rejected'];
+  try {
+    res.json(
+      await readPaperTrades(redis, strategy, {
+        offset: Number(req.query['offset']) || 0,
+        limit: Number(req.query['limit']) || 20,
+        includeRejected: rejected === '1' || rejected === 'true',
+      }),
+    );
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message });
+  }
 });
 
 app.get('/api/paper/daily', async (_req: Request, res: Response) => {

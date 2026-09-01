@@ -119,6 +119,32 @@ async function readStrategy(
   };
 }
 
+export interface PaperTradesPage {
+  trades: PaperTradeRecord[];
+  /** 필터 적용 후 전체 건수 (더 보기 버튼 노출 판단용) */
+  total: number;
+  offset: number;
+}
+
+/**
+ * 체결 내역 페이지 조회. 라이브 요약(readPaper)은 최근 30건만 싣지만,
+ * 이 함수는 저장된 전량(최대 500건)을 offset/limit 으로 잘라 과거까지 넘겨봅니다.
+ * 리스트는 lpush 라 index 0 이 최신입니다.
+ */
+export async function readPaperTrades(
+  redis: Redis,
+  strategyId: string,
+  opts: { offset?: number; limit?: number; includeRejected?: boolean } = {},
+): Promise<PaperTradesPage> {
+  const includeRejected = opts.includeRejected ?? false;
+  const limit = Math.min(Math.max(Math.trunc(opts.limit ?? 20), 1), 500);
+  const offset = Math.max(Math.trunc(opts.offset ?? 0), 0);
+  const all = (await redis.lrange(K.paperTrades(strategyId), 0, -1))
+    .map((r) => JSON.parse(r) as PaperTradeRecord)
+    .filter((t) => includeRejected || t.status !== 'REJECTED');
+  return { total: all.length, offset, trades: all.slice(offset, offset + limit) };
+}
+
 export interface PaperDailyRow {
   /** 스냅샷 날짜 (07:30 기준). 'live' 는 마지막 스냅샷 이후 현재까지 진행분 */
   date: string;
