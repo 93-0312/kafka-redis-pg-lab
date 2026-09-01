@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { clock, money, signPct, upDown } from '@/lib/format';
+import { money, signPct, stamp, upDown } from '@/lib/format';
 import type { PaperDailyRow, PaperSummary, PaperStrategySummary } from '@/lib/types';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? 'http://localhost:4000';
@@ -263,7 +263,7 @@ export function PaperPanel() {
                     <span className="type">
                       {tr.status === 'REJECTED' ? '거부' : tr.side === 'BUY' ? '매수' : '매도'}
                     </span>
-                    <span>{clock(tr.filledAt)}</span>
+                    <span>{stamp(tr.filledAt)}</span>
                   </div>
                   <div className="msg">
                     {tr.name} {tr.quantity.toLocaleString('ko-KR')}주 @ {money(tr.price, tr.currency ?? 'KRW')}

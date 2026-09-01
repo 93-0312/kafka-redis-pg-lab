@@ -20,4 +20,13 @@ export const clock = (iso: string): string => {
   return d.toLocaleTimeString('ko-KR', { hour12: false });
 };
 
+/** 체결 내역용: 월/일 시:분 (여러 날짜가 섞인 피드에서 언제 체결됐는지 구분) */
+export const stamp = (iso: string): string => {
+  if (!iso) return '-';
+  const d = new Date(iso);
+  const md = d.toLocaleDateString('ko-KR', { month: '2-digit', day: '2-digit' }).replace(/\.$/, '');
+  const hm = d.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false });
+  return `${md} ${hm}`;
+};
+
 export const hhmm = (bucket: string): string => `${bucket.slice(0, 2)}:${bucket.slice(2)}`;
