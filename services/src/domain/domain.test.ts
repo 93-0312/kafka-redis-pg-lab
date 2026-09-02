@@ -11,7 +11,9 @@ import {
 import {
   AsOfIndicatorStore,
   EMPTY_INDICATORS,
+  computeChannelLow,
   computeDailyIndicators,
+  computeTrendline,
   type DailyCandle,
   type DailyIndicators,
 } from './indicators.js';
@@ -152,10 +154,10 @@ const position = (avgPrice: number, peakPrice?: number): PaperPosition => ({
   quantity: 10, avgPrice, openedAt: '2026-08-18T10:00:00+09:00', peakPrice,
 });
 
-test('전략 8개가 등록되어 있다', () => {
+test('전략 11개가 등록되어 있다', () => {
   assert.deepEqual(
     STRATEGIES.map((s) => s.id),
-    ['meanrevert', 'momentum', 'deepdip', 'scalper', 'highbreak', 'bollbounce', 'bandride', 'goldenzone'],
+    ['meanrevert', 'momentum', 'deepdip', 'scalper', 'highbreak', 'bollbounce', 'bandride', 'goldenzone', 'bitgak', 'bitgakw', 'gogojeo'],
   );
 });
 
@@ -333,6 +335,38 @@ test('indicators: MA20·볼린저·RSI·ATR 계산', () => {
   assert.equal(ind.lastClose, 129);
 });
 
+test('trendline(빗각): 상승 저점쌍이면 오늘로 투영, 하락이면 null', () => {
+  // 저가를 단조 증가(150+i)로 깔면 심은 딥 저점 2개만 피벗이 됩니다
+  // (평평하게 깔면 동률 봉이 전부 피벗으로 잡히는 함정 주의)
+  const base = (i: number) => ({ ...candle(i, 170), low: 150 + i });
+  const candles = Array.from({ length: 30 }, (_, i) => base(i));
+  candles[10] = { ...base(10), low: 110 };
+  candles[20] = { ...base(20), low: 116 };
+  const line = computeTrendline(candles);
+  // 기울기 (116-110)/10 = 0.6, 투영 = 116 + 0.6×(30-20) = 122
+  assert.ok(line !== null && Math.abs(line - 122) < 1e-9);
+
+  // 저점이 낮아지면(하락 기울기) 지지선으로 안 씀
+  candles[20] = { ...base(20), low: 105 };
+  assert.equal(computeTrendline(candles), null);
+});
+
+test('channelLow(고고저): 하락 고점쌍 + 최저점 평행 이동', () => {
+  // 고가는 단조 감소(200-i)로 깔아 심은 고점 2개만 피벗이 되게 합니다
+  const base = (i: number) => ({ ...candle(i, 150), high: 200 - i, low: 100 });
+  const candles = Array.from({ length: 30 }, (_, i) => base(i));
+  candles[10] = { ...base(10), high: 230 };  // 고점 1
+  candles[20] = { ...base(20), high: 224 };  // 고점 2 (하락, 기울기 -0.6/일)
+  candles[25] = { ...base(25), low: 90 };    // 추세선 대비 가장 깊은 저가 (앵커)
+  const line = computeChannelLow(candles);
+  // 앵커 90(25일차) + (-0.6)×(30-25) = 87
+  assert.ok(line !== null && Math.abs(line - 87) < 1e-9);
+
+  // 고점이 높아지면(상승) 하락 채널이 아님 → null
+  candles[20] = { ...base(20), high: 236 };
+  assert.equal(computeChannelLow(candles), null);
+});
+
 function avgOf(from: number, to: number): number {
   let s = 0;
   for (let v = from; v <= to; v += 1) s += v;
@@ -393,7 +427,7 @@ test('deepdip: ATR 기반 동적 손절 — 변동성 크면 손절 폭 확대',
 });
 
 const emptyDaily = {
-  ma20: null, ma60: null, rsi14: null, bbUpper: null, bbLower: null, atrPct: null, lastClose: null,
+  ma20: null, ma60: null, rsi14: null, bbUpper: null, bbLower: null, atrPct: null, trendline: null, trendlineW: null, channelLow: null, lastClose: null,
 };
 
 test('highbreak: 비대칭 청산 (+3% 익절선부터 트레일링(-1.5%) / -0.8% 손절)', () => {

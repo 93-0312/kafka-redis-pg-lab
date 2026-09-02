@@ -281,6 +281,80 @@ export const STRATEGIES: StrategyDef[] = [
     stopLossPct: 1.5,
     trailPct: 1,
   },
+  {
+    id: 'bitgak',
+    label: '빗각눌림',
+    description:
+      '거래량 터진 저점들로 그은 상승 추세선(빗각)에 눌렸다 위로 되돌아오는 순간 매수 (정배열 한정) · ' +
+      '익절 +3%부터 트레일링(-1.5%) / 손절 -1.5% · 정규장 한정',
+    regularSessionOnly: true,
+    maxHoldMin: 10080, // 추세 홀드형: 1주일 (빗각은 큰 흐름 지지선)
+    // 인범 빗각의 기계화: 거래량 가중 스윙 저점 2개를 이은 상승 추세선(indicators.computeTrendline).
+    // 정배열 상승추세에서 그 선에 눌렸다(직전가<선) 되돌아오는(현재가≥선) 순간 진입.
+    entry: (t, rate, ctx) => {
+      const p = prevPriceOf(t, ctx);
+      const line = ctx.daily?.trendline;
+      const ma20 = ctx.daily?.ma20;
+      const ma60 = ctx.daily?.ma60;
+      return line != null && p != null && ma20 != null && ma60 != null &&
+        ma20 > ma60 && // 정배열(상승추세)에서만
+        p < line && t.price >= line && // 빗각 아래→위 회복 = 눌림목 반등
+        rate > 0
+        ? `빗각 눌림목 반등: 상승 추세선(${Math.round(line).toLocaleString('ko-KR')}) 회복 (${pct(rate)})`
+        : null;
+    },
+    takeProfitPct: 3,
+    stopLossPct: 1.5,
+    trailPct: 1.5,
+  },
+  {
+    id: 'bitgakw',
+    label: '주봉빗각',
+    description:
+      '주봉(10개월 일봉 합성) 스케일의 거래량 가중 저점들로 그은 상승 빗각 회복 시 매수 · ' +
+      '익절 +4%부터 트레일링(-2%) / 손절 -2% · 정규장 한정 (원본 "그어두고 기다리는" 빗각에 근접)',
+    regularSessionOnly: true,
+    maxHoldMin: 10080, // 큰 스케일 지지선: 1주일 홀드
+    // 일봉 빗각(bitgak)의 주봉판. 선이 훨씬 굵어(10개월 저점) 신호가 드문 대신
+    // 지지의 의미가 큽니다 — 인범 빗각의 "기다리는 매매"에 가까운 쪽.
+    entry: (t, rate, ctx) => {
+      const p = prevPriceOf(t, ctx);
+      const line = ctx.daily?.trendlineW;
+      const ma20 = ctx.daily?.ma20;
+      const ma60 = ctx.daily?.ma60;
+      return line != null && p != null && ma20 != null && ma60 != null &&
+        ma20 > ma60 &&
+        p < line && t.price >= line &&
+        rate > 0
+        ? `주봉 빗각 반등: 상승 추세선(${Math.round(line).toLocaleString('ko-KR')}) 회복 (${pct(rate)})`
+        : null;
+    },
+    takeProfitPct: 4,
+    stopLossPct: 2,
+    trailPct: 2,
+  },
+  {
+    id: 'gogojeo',
+    label: '고고저채널',
+    description:
+      '거래량 실린 고점 2개로 그은 하락 추세선을 최저점에 평행 이동한 채널 하단에서 반등하는 순간 매수 · ' +
+      '익절 +3%부터 트레일링(-1.5%) / 손절 -2% · 정규장 한정 (평행 채널 가정의 검증판)',
+    regularSessionOnly: true,
+    maxHoldMin: 1440, // 역추세 반등: 1일
+    // 고고저: "하락이 채널 하단 근처에서 멈춘다"는 평행 채널 가정. 상단(고점 저항)과 달리
+    // 하단은 행동 논리가 약한 순수 가정이라, 이 전략 자체가 그 가정의 백테스트입니다.
+    // 하락 추세 종목의 낙폭 매수라 정배열 필터는 걸지 않습니다 (걸면 신호가 안 나옴).
+    entry: (t, _rate, ctx) => {
+      const p = prevPriceOf(t, ctx);
+      const line = ctx.daily?.channelLow;
+      return line != null && p != null && p < line && t.price >= line
+        ? `고고저 채널 하단(${Math.round(line).toLocaleString('ko-KR')}) 반등`
+        : null;
+    },
+    takeProfitPct: 3,
+    stopLossPct: 2,
+    trailPct: 1.5,
+  },
 ];
 
 export const STRATEGY_IDS = STRATEGIES.map((s) => s.id);

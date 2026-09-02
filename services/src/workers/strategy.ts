@@ -62,7 +62,7 @@ async function refreshIndicators(
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
   for (const symbol of symbols) {
     try {
-      const candles = await fetchDailyCandles(symbol, 80);
+      const candles = await fetchDailyCandles(symbol, 200); // API 상한. 주봉 빗각(10개월 저점)에 필요
       bySymbol.set(symbol, candles.map(toDailyCandle));
     } catch (err) {
       console.warn(`[strategy] ${symbol} 일봉 조회 실패:`, (err as Error).message);
