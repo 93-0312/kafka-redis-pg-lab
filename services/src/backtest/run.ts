@@ -147,6 +147,7 @@ async function main(): Promise<void> {
     `비용 모델: 수수료 ${costs.feePct}%/편도 · 국내 매도세 ${costs.krSellTaxPct}% · 슬리피지 ${costs.slippagePct}%/편도\n`,
   );
 
+  const t0 = Date.now();
   const cfg: BacktestConfig = {
     initialCash: config.paper.initialCash,
     positionPct: config.paper.positionPct,
@@ -159,6 +160,11 @@ async function main(): Promise<void> {
     dailyMaxLossPct: config.paper.dailyMaxLossPct,
     dailyCandles,
     costs,
+    onProgress: (done, total) => {
+      const pctDone = ((done / total) * 100).toFixed(0);
+      const elapsed = ((Date.now() - t0) / 1000).toFixed(0);
+      console.log(`재생 중... ${(done / 1e6).toFixed(1)}M/${(total / 1e6).toFixed(1)}M 틱 (${pctDone}%) · ${elapsed}초 경과`);
+    },
   };
 
   if (sweep) {
@@ -187,7 +193,16 @@ async function main(): Promise<void> {
     return;
   }
 
-  const results = runBacktest(ticks, STRATEGIES, cfg);
+  // --only bitgak,gogojeo : 지정한 전략만 재생 (전략별 계좌가 독립이라 결과는 전체 런과 동일).
+  // 전략 11개 전부 돌리면 재생만 ~1시간이므로, 새 전략 검증은 이걸로 줄입니다.
+  // 단, decide() 등 공용 코드를 고쳤을 때는 전체 런으로 기존 전략 회귀 확인.
+  const only = arg('only')?.split(',').map((s) => s.trim()).filter(Boolean);
+  const defs = only?.length ? STRATEGIES.filter((s) => only.includes(s.id)) : STRATEGIES;
+  if (only?.length && defs.length < only.length) {
+    const known = new Set(STRATEGIES.map((s) => s.id));
+    console.warn(`⚠️ 모르는 전략 무시: ${only.filter((id) => !known.has(id)).join(', ')}`);
+  }
+  const results = runBacktest(ticks, defs, cfg);
   printResults(results);
 
   if (showTrades) {

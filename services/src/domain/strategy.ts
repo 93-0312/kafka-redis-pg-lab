@@ -49,6 +49,13 @@ export interface StrategyDef {
   /** 동적 손절 폭(%). 지정 시 stopLossPct 대신 사용 (예: ATR 기반) */
   dynamicStopPct?: (ctx: MarketCtx) => number;
   /**
+   * 구조적 청산 (지지선 이탈 등). 청산하면 사유 문자열, 아니면 null.
+   * 하드 손절(stopLossPct) "다음", 트레일링 익절 "이전"에 평가합니다 —
+   * 빗각류 전략의 "손절선 = 추세선" 구조용: 선이 오르면 손절선도 따라 오르고,
+   * stopLossPct 는 선이 사라진 날(피벗 변경 등)의 재난 방지 백스톱으로만 남습니다.
+   */
+  exitSignal?: (tick: TickEvent, ctx: MarketCtx, position: PaperPosition) => string | null;
+  /**
    * true 면 익절·손절·트레일링 폭을 그날 변동성(ATR)에 비례해 함께 넓힙니다.
    * 손절만 넓히면 손익비가 무너지므로(12% 걸고 1.5% 먹기) 셋을 같은 배율로 스케일합니다.
    */
@@ -286,11 +293,13 @@ export const STRATEGIES: StrategyDef[] = [
     label: '빗각눌림',
     description:
       '거래량 터진 저점들로 그은 상승 추세선(빗각)에 눌렸다 위로 되돌아오는 순간 매수 (정배열 한정) · ' +
-      '익절 +3%부터 트레일링(-1.5%) / 손절 -1.5% · 정규장 한정',
+      '손절 = 빗각 -0.5% 이탈 (선이 오르면 손절선도 따라 오름) · 익절 +5%부터 트레일링(-2.5%) · 정규장 한정',
     regularSessionOnly: true,
     maxHoldMin: 10080, // 추세 홀드형: 1주일 (빗각은 큰 흐름 지지선)
     // 인범 빗각의 기계화: 거래량 가중 스윙 저점 2개를 이은 상승 추세선(indicators.computeTrendline).
     // 정배열 상승추세에서 그 선에 눌렸다(직전가<선) 되돌아오는(현재가≥선) 순간 진입.
+    // ★ 원본의 핵심은 청산 쪽: 빗각이 손절선이라 초기 리스크가 소액이고(진입가≈선),
+    //   선이 지켜지는 한 길게 타서 "질 때 작게, 이길 때 크게"의 비대칭을 만듭니다.
     entry: (t, rate, ctx) => {
       const p = prevPriceOf(t, ctx);
       const line = ctx.daily?.trendline;
@@ -303,20 +312,27 @@ export const STRATEGIES: StrategyDef[] = [
         ? `빗각 눌림목 반등: 상승 추세선(${Math.round(line).toLocaleString('ko-KR')}) 회복 (${pct(rate)})`
         : null;
     },
-    takeProfitPct: 3,
-    stopLossPct: 1.5,
-    trailPct: 1.5,
+    exitSignal: (t, ctx) => {
+      const line = ctx.daily?.trendline;
+      return line != null && t.price < line * (1 - 0.005)
+        ? `빗각 이탈: 추세선(${Math.round(line).toLocaleString('ko-KR')}) -0.5% 하향 이탈`
+        : null;
+    },
+    takeProfitPct: 5,
+    stopLossPct: 4, // 백스톱: 빗각이 사라진 날(피벗 변경)의 재난 방지용
+    trailPct: 2.5,
   },
   {
     id: 'bitgakw',
     label: '주봉빗각',
     description:
       '주봉(10개월 일봉 합성) 스케일의 거래량 가중 저점들로 그은 상승 빗각 회복 시 매수 · ' +
-      '익절 +4%부터 트레일링(-2%) / 손절 -2% · 정규장 한정 (원본 "그어두고 기다리는" 빗각에 근접)',
+      '손절 = 빗각 -1% 이탈 · 익절 +7%부터 트레일링(-3%) · 정규장 한정 (원본 "기다리는 매매"에 근접)',
     regularSessionOnly: true,
-    maxHoldMin: 10080, // 큰 스케일 지지선: 1주일 홀드
+    maxHoldMin: 20160, // 큰 스케일 지지선: 2주 홀드 (빗각이 지켜지는 한 길게)
     // 일봉 빗각(bitgak)의 주봉판. 선이 훨씬 굵어(10개월 저점) 신호가 드문 대신
     // 지지의 의미가 큽니다 — 인범 빗각의 "기다리는 매매"에 가까운 쪽.
+    // 주봉 선은 노이즈 이탈 폭도 커서 이탈 마진(-1%)과 트레일링(-3%)을 일봉판보다 넓게.
     entry: (t, rate, ctx) => {
       const p = prevPriceOf(t, ctx);
       const line = ctx.daily?.trendlineW;
@@ -329,9 +345,15 @@ export const STRATEGIES: StrategyDef[] = [
         ? `주봉 빗각 반등: 상승 추세선(${Math.round(line).toLocaleString('ko-KR')}) 회복 (${pct(rate)})`
         : null;
     },
-    takeProfitPct: 4,
-    stopLossPct: 2,
-    trailPct: 2,
+    exitSignal: (t, ctx) => {
+      const line = ctx.daily?.trendlineW;
+      return line != null && t.price < line * (1 - 0.01)
+        ? `빗각 이탈: 주봉 추세선(${Math.round(line).toLocaleString('ko-KR')}) -1% 하향 이탈`
+        : null;
+    },
+    takeProfitPct: 7,
+    stopLossPct: 5, // 백스톱: 선 소멸일 재난 방지
+    trailPct: 3,
   },
   {
     id: 'gogojeo',
@@ -396,6 +418,12 @@ export function decide(
     // "트레일링 익절"이 아니라 손절로 기록되어야 성적 해석이 흐려지지 않습니다.
     if (fromAvg <= -stopPct / 100) {
       return { side: 'SELL', reason: `손절: 평단 대비 ${pct(fromAvg)} ≤ -${stopPct.toFixed(1)}%` };
+    }
+
+    // 구조적 청산 (빗각 이탈 등): 고정 % 손절보다 촘촘한, 전략 고유의 방어선
+    const structural = def.exitSignal?.(tick, ctx, position);
+    if (structural) {
+      return { side: 'SELL', reason: structural };
     }
 
     // 트레일링 익절: 보유 중 고점이 한 번이라도 익절선을 넘었다면(=발동) 그 뒤로는

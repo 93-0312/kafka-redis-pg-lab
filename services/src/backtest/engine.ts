@@ -35,6 +35,8 @@ export interface BacktestConfig {
   dailyMaxLossPct: number;
   /** 종목별 일봉 (지표 as-of 계산용). 없으면 지표 필터는 통과 처리됩니다 */
   dailyCandles?: Map<string, DailyCandle[]>;
+  /** 재생 진행 콜백 (100만 틱마다). CLI 가 진행 로그를 찍는 용도 */
+  onProgress?: (done: number, total: number) => void;
   /**
    * 거래비용 모델 (편도 기준 %).
    * scalper 처럼 익절 폭이 좁은 전략은 비용을 넣는 순간 기대값이 뒤집힐 수 있어서,
@@ -144,7 +146,10 @@ export function runBacktest(
     return value;
   };
 
+  let done = 0;
   for (const tick of ticks) {
+    done += 1;
+    if (cfg.onProgress && done % 1_000_000 === 0) cfg.onProgress(done, ticks.length);
     if (!config_ok(tick, cfg)) continue;
 
     const now = Date.parse(tick.polledAt) || 0;

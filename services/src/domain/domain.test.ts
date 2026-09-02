@@ -323,6 +323,21 @@ const candle = (day: number, close: number, spread = 0.01): DailyCandle => ({
   open: close, high: close * (1 + spread), low: close * (1 - spread), close, volume: 1000,
 });
 
+test('bitgak: 구조적 청산 — 빗각 이탈이 손절선, 하드 손절이 최우선', () => {
+  const def = byId('bitgak');
+  const ctx = { ...CTX, daily: daily(null, { trendline: 100_000 }) };
+  const pos = position(100_000);
+  // 선 -0.5% 이탈(99,400 < 99,500) → 빗각 이탈 청산
+  const exit = decide(tick({ price: 99_400 }), 0, pos, ctx, def);
+  assert.equal(exit?.side, 'SELL');
+  assert.match(exit!.reason, /빗각 이탈/);
+  // 선 위(99,600)면 홀드 — 고정 % 손절(-4%)에도 안 걸림
+  assert.equal(decide(tick({ price: 99_600 }), 0, pos, ctx, def), null);
+  // 평단 -4% 급락이면 빗각 이탈이기도 하지만 하드 손절이 먼저 (사유가 손절로 기록)
+  const hard = decide(tick({ price: 96_000 }), 0, pos, ctx, def);
+  assert.match(hard!.reason, /손절/);
+});
+
 test('indicators: MA20·볼린저·RSI·ATR 계산', () => {
   // 100 에서 매일 +1 씩 오르는 30일
   const candles = Array.from({ length: 30 }, (_, i) => candle(i, 100 + i));
