@@ -63,20 +63,40 @@ const avg = (xs: number[]): number => xs.reduce((s, x) => s + x, 0) / xs.length;
  * 저점이 2개 미만이거나 기울기가 하락이면 null.
  */
 const PIVOT_K = 3;
-export function computeTrendline(candles: DailyCandle[], pivotK = PIVOT_K, minLen = 20): number | null {
+
+/** 시각화용 좌표: candles 배열 인덱스 + 가격 */
+export interface LinePoint { i: number; price: number }
+export interface TrendlineDetail {
+  /** 채택된 두 저점 (a=과거, b=최근) */
+  a: LinePoint;
+  b: LinePoint;
+  /** 하루(봉 1개)당 가격 변화 */
+  slope: number;
+  /** 오늘(마지막 봉 다음날) 투영값 — 전략이 실제로 쓰는 선 값 */
+  today: number;
+  /** 거래량 필터를 통과한 모든 스윙 저점 (후보 표시용) */
+  pivots: LinePoint[];
+}
+
+/** 빗각 상세 (시각화용). 전략이 쓰는 값은 computeTrendline 래퍼로 동일하게 유지 */
+export function computeTrendlineDetail(
+  candles: DailyCandle[],
+  pivotK = PIVOT_K,
+  minLen = 20,
+): TrendlineDetail | null {
   const n = candles.length;
   if (n < minLen) return null;
   const vols = candles.map((c) => c.volume).filter((v) => v > 0);
   const avgVol = vols.length > 0 ? avg(vols) : 0;
 
-  const lows: { i: number; low: number }[] = [];
+  const lows: LinePoint[] = [];
   for (let i = pivotK; i < n - pivotK; i += 1) {
     const c = candles[i]!;
     let isPivot = true;
     for (let j = i - pivotK; j <= i + pivotK; j += 1) {
       if (j !== i && candles[j]!.low < c.low) { isPivot = false; break; }
     }
-    if (isPivot && c.volume >= avgVol) lows.push({ i, low: c.low });
+    if (isPivot && c.volume >= avgVol) lows.push({ i, price: c.low });
   }
   if (lows.length < 2) return null;
 
@@ -84,10 +104,14 @@ export function computeTrendline(candles: DailyCandle[], pivotK = PIVOT_K, minLe
   const p2 = lows[lows.length - 1]!; // 최근 저점
   const dt = p2.i - p1.i;
   if (dt <= 0) return null;
-  const slope = (p2.low - p1.low) / dt;
+  const slope = (p2.price - p1.price) / dt;
   if (slope <= 0) return null; // 상승 빗각만 지지선으로 인정
   // candles 마지막 index = n-1 (전일). 오늘은 그 다음날 = index n.
-  return p2.low + slope * (n - p2.i);
+  return { a: p1, b: p2, slope, today: p2.price + slope * (n - p2.i), pivots: lows };
+}
+
+export function computeTrendline(candles: DailyCandle[], pivotK = PIVOT_K, minLen = 20): number | null {
+  return computeTrendlineDetail(candles, pivotK, minLen)?.today ?? null;
 }
 
 /**
@@ -99,20 +123,37 @@ export function computeTrendline(candles: DailyCandle[], pivotK = PIVOT_K, minLe
  * ★ 상단(고점 저항선)은 매도자들이 실제로 있던 자리라는 행동 논리가 있지만,
  *   하단은 "진폭이 유지된다"는 평행 채널 가정 하나로 서 있습니다 — 백테스트로 심판.
  */
-export function computeChannelLow(candles: DailyCandle[], pivotK = PIVOT_K, minLen = 20): number | null {
+export interface ChannelLowDetail {
+  /** 채택된 두 고점 (a=과거, b=최근) — 하락 저항선 */
+  a: LinePoint;
+  b: LinePoint;
+  slope: number;
+  /** 평행 이동의 앵커 (추세선 대비 가장 깊은 저가) */
+  anchor: LinePoint;
+  /** 채널 하단의 오늘 투영값 */
+  today: number;
+  /** 거래량 필터를 통과한 모든 스윙 고점 */
+  pivots: LinePoint[];
+}
+
+export function computeChannelLowDetail(
+  candles: DailyCandle[],
+  pivotK = PIVOT_K,
+  minLen = 20,
+): ChannelLowDetail | null {
   const n = candles.length;
   if (n < minLen) return null;
   const vols = candles.map((c) => c.volume).filter((v) => v > 0);
   const avgVol = vols.length > 0 ? avg(vols) : 0;
 
-  const highs: { i: number; high: number }[] = [];
+  const highs: LinePoint[] = [];
   for (let i = pivotK; i < n - pivotK; i += 1) {
     const c = candles[i]!;
     let isPivot = true;
     for (let j = i - pivotK; j <= i + pivotK; j += 1) {
       if (j !== i && candles[j]!.high > c.high) { isPivot = false; break; }
     }
-    if (isPivot && c.volume >= avgVol) highs.push({ i, high: c.high });
+    if (isPivot && c.volume >= avgVol) highs.push({ i, price: c.high });
   }
   if (highs.length < 2) return null;
 
@@ -120,21 +161,32 @@ export function computeChannelLow(candles: DailyCandle[], pivotK = PIVOT_K, minL
   const p2 = highs[highs.length - 1]!;
   const dt = p2.i - p1.i;
   if (dt <= 0) return null;
-  const slope = (p2.high - p1.high) / dt;
+  const slope = (p2.price - p1.price) / dt;
   if (slope >= 0) return null; // 하락 추세선만 (상승 채널의 하단은 bitgak 이 담당)
 
   // 채널 폭: 첫 고점 이후 구간에서 추세선 대비 가장 깊이 내려간 저가를 앵커로
   let anchorI = -1;
   let maxDepth = 0; // 추세선 아래로 벗어난 깊이 (음수일수록 깊음)
   for (let i = p1.i; i < n; i += 1) {
-    const depth = candles[i]!.low - (p1.high + slope * (i - p1.i));
+    const depth = candles[i]!.low - (p1.price + slope * (i - p1.i));
     if (anchorI < 0 || depth < maxDepth) {
       anchorI = i;
       maxDepth = depth;
     }
   }
   if (anchorI < 0) return null;
-  return candles[anchorI]!.low + slope * (n - anchorI);
+  return {
+    a: p1,
+    b: p2,
+    slope,
+    anchor: { i: anchorI, price: candles[anchorI]!.low },
+    today: candles[anchorI]!.low + slope * (n - anchorI),
+    pivots: highs,
+  };
+}
+
+export function computeChannelLow(candles: DailyCandle[], pivotK = PIVOT_K, minLen = 20): number | null {
+  return computeChannelLowDetail(candles, pivotK, minLen)?.today ?? null;
 }
 
 /**

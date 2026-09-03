@@ -6,6 +6,7 @@ import { checkHeartbeats, checkProgress, startHeartbeat } from '../lib/heartbeat
 import { K } from '../lib/keys.js';
 import { createRedis } from '../lib/redis.js';
 import { createPool } from '../lib/pg.js';
+import { readBitgak } from './bitgak.js';
 import { readPaper, readPaperDaily, readPaperTrades } from './paper.js';
 import { readPortfolio } from './portfolio.js';
 import { readSummary } from './summary.js';
@@ -77,6 +78,24 @@ app.get('/api/paper', async (_req: Request, res: Response) => {
     return;
   }
   res.json(summary);
+});
+
+app.get('/api/bitgak', async (req: Request, res: Response) => {
+  const symbol = String(req.query['symbol'] ?? '');
+  if (!symbol) {
+    res.status(400).json({ error: 'symbol 파라미터가 필요합니다.' });
+    return;
+  }
+  try {
+    const view = await readBitgak(redis, symbol);
+    if (!view) {
+      res.status(404).json({ error: '일봉 데이터가 아직 없습니다 (strategy 워커의 지표 갱신 대기).' });
+      return;
+    }
+    res.json(view);
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message });
+  }
 });
 
 app.get('/api/paper/trades', async (req: Request, res: Response) => {

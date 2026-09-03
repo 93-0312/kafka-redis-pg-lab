@@ -169,3 +169,24 @@ export interface PriceAlert {
   message: string;
   detectedAt: string;
 }
+
+// ── 빗각 시각화 ─────────────────────────────────────────
+export interface BitgakLine {
+  id: string;
+  label: string;
+  series: (number | null)[];
+  today: number;
+  points: { t: string; price: number; role: 'pivot' | 'anchor' }[];
+  candidates: { t: string; price: number }[];
+}
+
+export interface BitgakView {
+  symbol: string;
+  name: string;
+  market: Market;
+  currency: Currency;
+  lastPrice: number;
+  candles: { t: string; o: number; h: number; l: number; c: number; v: number }[];
+  lines: BitgakLine[];
+  updatedAt: string;
+}

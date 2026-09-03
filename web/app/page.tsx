@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { AlertFeed } from '@/components/AlertFeed';
+import { BitgakPanel } from '@/components/BitgakPanel';
 import { PaperPanel } from '@/components/PaperPanel';
 import { PortfolioPanel } from '@/components/PortfolioPanel';
 import { PriceChart } from '@/components/PriceChart';
@@ -18,13 +19,14 @@ const STATUS_TEXT = {
 
 const COLOR = { up: '#ef5350', down: '#5b8def', flat: '#e8ecf4' } as const;
 
-type Tab = Market | 'PF' | 'PAPER';
+type Tab = Market | 'PF' | 'PAPER' | 'BITGAK';
 
 const TABS: { key: Tab; label: string; hint: string }[] = [
   { key: 'KR', label: '국내', hint: 'KRX 09:00–15:30' },
   { key: 'US', label: '미국', hint: '23:30–06:00 KST' },
   { key: 'PF', label: '포트폴리오', hint: '내 계좌' },
   { key: 'PAPER', label: '페이퍼', hint: '가상 매매' },
+  { key: 'BITGAK', label: '빗각', hint: '추세선 시각화' },
 ];
 
 /** 구버전 알림에는 market 필드가 없으므로 심볼로 추정합니다 (KRX = 6자리 숫자) */
@@ -36,13 +38,13 @@ export default function Page() {
   const [chartInterval, setChartInterval] = useState<ChartInterval>('1m');
   const { summary, alerts, state } = useDashboardStream(focus, chartInterval);
 
-  const market: Market = tab === 'PF' || tab === 'PAPER' ? 'KR' : tab;
+  const market: Market = tab === 'PF' || tab === 'PAPER' || tab === 'BITGAK' ? 'KR' : tab;
   const quotes = (summary?.quotes ?? []).filter((q) => q.market === market);
   const tabAlerts = alerts.filter((a) => alertMarket(a) === market);
 
   // 탭 전환 시 현재 focus 가 다른 시장이면 이 탭의 1위 종목으로 차트를 옮깁니다.
   useEffect(() => {
-    if (tab === 'PF' || tab === 'PAPER' || !summary) return;
+    if (tab === 'PF' || tab === 'PAPER' || tab === 'BITGAK' || !summary) return;
     const inTab = quotes.some((q) => q.symbol === summary.focus);
     if (!inTab && quotes[0]) setFocus(quotes[0].symbol);
   }, [tab, summary]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -88,6 +90,8 @@ export default function Page() {
         <PortfolioPanel />
       ) : tab === 'PAPER' ? (
         <PaperPanel />
+      ) : tab === 'BITGAK' ? (
+        <BitgakPanel />
       ) : (
         <>
       <section className="grid-kpi">
