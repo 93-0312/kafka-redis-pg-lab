@@ -46,16 +46,61 @@ const SHOW = 120;
 const weekNum = (iso: string): number =>
   Math.floor((Date.parse(iso.slice(0, 10)) / 86_400_000 + 3) / 7);
 
-export async function readBitgak(redis: Redis, symbol: string): Promise<BitgakView | null> {
+/**
+ * Redis 의 일봉 원본을 전략과 같은 규칙으로 정리해 돌려줍니다.
+ * 저장 원본은 토스 응답 순서(최신→과거)라 정렬이 필수. 오늘의 미완성 봉도
+ * 전략과 똑같이 제외해야(as-of) "전략이 보는 바로 그 선"이 그려집니다.
+ */
+async function loadCandles(redis: Redis, symbol: string): Promise<DailyCandle[] | null> {
   const raw = await redis.get(K.dailyCandles(symbol));
   if (!raw) return null;
-  // 저장 원본은 토스 응답 순서(최신→과거)라 정렬이 필수. 오늘의 미완성 봉도
-  // 전략과 똑같이 제외해야(as-of) "전략이 보는 바로 그 선"이 그려집니다.
   const today = dateKey();
   const all = (JSON.parse(raw) as DailyCandle[])
     .filter((c) => dateKey(c.timestamp) < today)
     .sort((a, b) => a.timestamp.localeCompare(b.timestamp));
-  if (all.length === 0) return null;
+  return all.length > 0 ? all : null;
+}
+
+export interface BitgakOverviewRow {
+  symbol: string;
+  name: string;
+  market: Market;
+  /** 오늘 시점에 그려지는 선 (없으면 false) */
+  daily: boolean;
+  weekly: boolean;
+  /** 고고선(하락 저항선)이 그려지는지 — 그룹 기준엔 안 넣고 마커로만 표시 */
+  gogo: boolean;
+}
+
+/**
+ * 전 종목의 빗각 유무 개요 — 셀렉트에서 "선이 그려진 종목"을 위로 올리기 위한 것.
+ * 선이 있는 종목 먼저, 각 그룹 안은 이름순.
+ */
+export async function readBitgakOverview(redis: Redis): Promise<BitgakOverviewRow[]> {
+  const keys = await redis.keys(K.dailyCandles('*'));
+  const prefix = K.dailyCandles('');
+  const rows: BitgakOverviewRow[] = [];
+  for (const key of keys) {
+    const symbol = key.slice(prefix.length);
+    const all = await loadCandles(redis, symbol);
+    if (!all) continue;
+    const quote = await redis.hgetall(K.quote(symbol));
+    rows.push({
+      symbol,
+      name: quote['name'] ?? symbol,
+      market: (quote['market'] ?? 'KR') as Market,
+      daily: computeTrendlineDetail(all) !== null,
+      weekly: computeTrendlineDetail(toWeeklyCandles(all), 2, 12) !== null,
+      gogo: computeChannelLowDetail(all) !== null,
+    });
+  }
+  const has = (r: BitgakOverviewRow) => (r.daily || r.weekly ? 0 : 1);
+  return rows.sort((a, b) => has(a) - has(b) || a.name.localeCompare(b.name, 'ko'));
+}
+
+export async function readBitgak(redis: Redis, symbol: string): Promise<BitgakView | null> {
+  const all = await loadCandles(redis, symbol);
+  if (!all) return null;
 
   const quote = await redis.hgetall(K.quote(symbol));
   const offset = Math.max(0, all.length - SHOW);
@@ -121,7 +166,7 @@ export async function readBitgak(redis: Redis, symbol: string): Promise<BitgakVi
       points: [g.a, g.b].map((p) => ({ t: t(p.i), price: p.price, role: 'pivot' as const })),
       candidates: g.pivots.filter((p) => !chosen.has(p.i)).map((p) => ({ t: t(p.i), price: p.price })),
     });
-    lines.push({
+    if (!g.broken) lines.push({
       id: 'gogojeo',
       label: '고고저 채널 하단',
       series: shown.map((_, si) => {

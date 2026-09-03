@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { money } from '@/lib/format';
-import type { BitgakView, DashboardSummary, QuoteRow } from '@/lib/types';
+import type { BitgakOverviewRow, BitgakView } from '@/lib/types';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? 'http://localhost:4000';
 const REFRESH_MS = 60_000; // 선은 일봉 기반이라 하루에 한 번 바뀜 — 느긋하게
@@ -19,26 +19,31 @@ const UP = '#ef5350';
 const DOWN = '#5b8def';
 
 export function BitgakPanel() {
-  const [quotes, setQuotes] = useState<QuoteRow[]>([]);
-  const [symbol, setSymbol] = useState<string>('005930');
+  const [rows, setRows] = useState<BitgakOverviewRow[]>([]);
+  const [symbol, setSymbol] = useState<string>('');
   const [view, setView] = useState<BitgakView | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // 종목 목록 (요약 API 재사용)
+  // 종목 개요 (빗각 유무 포함). 선이 있는 종목이 먼저 오도록 서버가 정렬해 줍니다.
+  // 첫 진입 시엔 선이 그려진 첫 종목을 기본 선택 — 빈 차트부터 보이지 않게.
   useEffect(() => {
     let alive = true;
-    (async () => {
+    const load = async () => {
       try {
-        const res = await fetch(`${API_BASE}/api/summary`);
-        if (!res.ok) return;
-        const json = (await res.json()) as DashboardSummary;
-        if (alive) setQuotes([...json.quotes].sort((a, b) => a.name.localeCompare(b.name, 'ko')));
+        const res = await fetch(`${API_BASE}/api/bitgak/overview`);
+        if (!res.ok || !alive) return;
+        const json = (await res.json()) as BitgakOverviewRow[];
+        setRows(json);
+        setSymbol((cur) => cur || json.find((r) => r.daily || r.weekly)?.symbol || json[0]?.symbol || '');
       } catch { /* 아래 뷰 fetch 가 에러를 표시 */ }
-    })();
-    return () => { alive = false; };
+    };
+    void load();
+    const timer = setInterval(() => void load(), 5 * 60_000); // 선은 하루 단위로 바뀜
+    return () => { alive = false; clearInterval(timer); };
   }, []);
 
   useEffect(() => {
+    if (!symbol) return;
     let alive = true;
     const load = async () => {
       try {
@@ -61,6 +66,12 @@ export function BitgakPanel() {
     return () => { alive = false; clearInterval(timer); };
   }, [symbol]);
 
+  // 옵션 라벨 마커: 일=일봉 빗각, 주=주봉 빗각, 고=고고선(하락 저항선)
+  const marks = (r: BitgakOverviewRow): string =>
+    [r.daily && '일', r.weekly && '주', r.gogo && '고'].filter(Boolean).join('·');
+  const withLine = rows.filter((r) => r.daily || r.weekly);
+  const withoutLine = rows.filter((r) => !r.daily && !r.weekly);
+
   return (
     <>
       <p className="panel-desc" style={{ marginBottom: 8 }}>
@@ -79,12 +90,21 @@ export function BitgakPanel() {
               borderRadius: 6, padding: '6px 10px', fontFamily: 'inherit', fontSize: 13,
             }}
           >
-            {quotes.length === 0 && <option value={symbol}>{symbol}</option>}
-            {quotes.map((q) => (
-              <option key={q.symbol} value={q.symbol}>
-                {q.name} ({q.symbol})
-              </option>
-            ))}
+            {rows.length === 0 && <option value={symbol}>{symbol || '불러오는 중…'}</option>}
+            <optgroup label={`빗각 있음 (${withLine.length})`}>
+              {withLine.map((r) => (
+                <option key={r.symbol} value={r.symbol}>
+                  {r.name} ({r.symbol}) · {marks(r)}
+                </option>
+              ))}
+            </optgroup>
+            <optgroup label={`빗각 없음 (${withoutLine.length})`}>
+              {withoutLine.map((r) => (
+                <option key={r.symbol} value={r.symbol}>
+                  {r.name} ({r.symbol}){r.gogo ? ' · 고' : ''}
+                </option>
+              ))}
+            </optgroup>
           </select>
           {view && (
             <span style={{ fontSize: 13, color: '#8b94a7' }}>

@@ -6,7 +6,7 @@ import { checkHeartbeats, checkProgress, startHeartbeat } from '../lib/heartbeat
 import { K } from '../lib/keys.js';
 import { createRedis } from '../lib/redis.js';
 import { createPool } from '../lib/pg.js';
-import { readBitgak } from './bitgak.js';
+import { readBitgak, readBitgakOverview } from './bitgak.js';
 import { readPaper, readPaperDaily, readPaperTrades } from './paper.js';
 import { readPortfolio } from './portfolio.js';
 import { readSummary } from './summary.js';
@@ -78,6 +78,14 @@ app.get('/api/paper', async (_req: Request, res: Response) => {
     return;
   }
   res.json(summary);
+});
+
+app.get('/api/bitgak/overview', async (_req: Request, res: Response) => {
+  try {
+    res.json(await readBitgakOverview(redis));
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message });
+  }
 });
 
 app.get('/api/bitgak', async (req: Request, res: Response) => {

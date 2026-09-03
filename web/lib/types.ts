@@ -190,3 +190,12 @@ export interface BitgakView {
   lines: BitgakLine[];
   updatedAt: string;
 }
+
+export interface BitgakOverviewRow {
+  symbol: string;
+  name: string;
+  market: Market;
+  daily: boolean;
+  weekly: boolean;
+  gogo: boolean;
+}
